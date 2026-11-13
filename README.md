@@ -22,6 +22,17 @@ npm run app:build   # Hush.app and .dmg in src-tauri/target/release/bundle
 
 Tests: `npm test` and `cargo test` (in `src-tauri`).
 
+## Releasing
+
+The version lives in `package.json`. To publish a release:
+
+```sh
+npm version 0.2.0        # updates package.json, commits and tags v0.2.0
+git push --follow-tags
+```
+
+The release workflow builds the `.dmg` on GitHub and attaches it to the release.
+
 ## How it works
 
 Hush runs your normal zsh. A small integration script (`src-tauri/shell/zsh/hush.zsh`)
