@@ -1,6 +1,7 @@
 mod colors;
 mod element;
 mod keys;
+mod prompt;
 mod terminal;
 mod view;
 

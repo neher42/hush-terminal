@@ -11,4 +11,6 @@ gpui = { version = "0.2", features = ["runtime_shaders"] }
 alacritty_terminal = "0.26"
 futures = "0.3"
 hush-core = { path = "../crates/hush-core" }
+hush-editor = { path = "../crates/hush-editor" }
+hush-complete = { path = "../crates/hush-complete" }
 dirs = "6"

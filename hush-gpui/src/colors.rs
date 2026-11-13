@@ -6,6 +6,8 @@ pub struct Palette {
     pub foreground: u32,
     pub background: u32,
     pub cursor: u32,
+    pub selection: u32,
+    pub selection_alpha: f32,
     pub ansi: [u32; 16],
 }
 
@@ -13,6 +15,8 @@ pub const LIGHT: Palette = Palette {
     foreground: 0x1b1e23,
     background: 0xffffff,
     cursor: 0x1b1e23,
+    selection: 0x2a63c7,
+    selection_alpha: 0.22,
     ansi: [
         0x1b1e23, 0xcc3a2f, 0x25804b, 0xa2670a, 0x2a63c7, 0x8a4ec2, 0x1b7f8c, 0xc9ced6, //
         0xa9afb8, 0xcc3a2f, 0x25804b, 0xa2670a, 0x2a63c7, 0x8a4ec2, 0x1b7f8c, 0x1b1e23,
@@ -32,6 +36,14 @@ impl Palette {
 
     pub fn background(&self) -> Hsla {
         hsla(self.background)
+    }
+
+    /// Translucent so colored text stays readable.
+    pub fn selection(&self) -> Hsla {
+        Hsla {
+            a: self.selection_alpha,
+            ..hsla(self.selection)
+        }
     }
 
     pub fn cursor(&self) -> Hsla {

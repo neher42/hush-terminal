@@ -9,6 +9,15 @@ use gpui::{
 use crate::terminal::GridSize;
 use crate::view::TerminalView;
 
+/// Where the grid is drawn and how big its cells are.
+#[derive(Debug, Clone, Copy)]
+pub struct Geometry {
+    pub origin: gpui::Point<Pixels>,
+    pub cell_width: Pixels,
+    pub line_height: Pixels,
+    pub grid: GridSize,
+}
+
 /// Draws the terminal grid: one shaped line per row, plus cell backgrounds and the cursor.
 pub struct TerminalElement {
     pub view: Entity<TerminalView>,
@@ -82,7 +91,14 @@ impl Element for TerminalElement {
             cell_width: f32::from(cell_width).round() as u16,
             cell_height: f32::from(line_height) as u16,
         };
-        self.view.update(cx, |view, _| view.terminal.resize(grid));
+        let geometry = Geometry {
+            origin: bounds.origin,
+            cell_width,
+            line_height,
+            grid,
+        };
+        self.view
+            .update(cx, |view, cx| view.set_geometry(geometry, cx));
 
         let bold = Font {
             weight: FontWeight::BOLD,
@@ -95,10 +111,13 @@ impl Element for TerminalElement {
         let offset = content.display_offset as i32;
         let cursor_point = content.cursor.point;
         let cursor_shape = content.cursor.shape;
+        let selection = content.selection;
+        let selection_color = palette.selection();
 
         let mut rows_text: Vec<(String, Vec<TextRun>)> =
             vec![(String::new(), Vec::new()); rows as usize];
         let mut backgrounds = Vec::new();
+        let mut selections = Vec::new();
         for indexed in content.display_iter {
             let row = indexed.point.line.0 + offset;
             if row < 0 || row >= i32::from(rows) {
@@ -113,18 +132,19 @@ impl Element for TerminalElement {
             } else {
                 (cell.fg, cell.bg)
             };
+            let x = bounds.origin.x + cell_width * indexed.point.column.0 as f32;
+            let y = bounds.origin.y + line_height * row as f32;
+            let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+                cell_width * 2.0
+            } else {
+                cell_width
+            };
+            let cell_bounds = Bounds::new(point(x, y), size(width, line_height));
+            if selection.is_some_and(|s| s.contains(indexed.point)) {
+                selections.push((cell_bounds, selection_color));
+            }
             if bg != default_bg {
-                let x = bounds.origin.x + cell_width * indexed.point.column.0 as f32;
-                let y = bounds.origin.y + line_height * row as f32;
-                let width = if cell.flags.contains(Flags::WIDE_CHAR) {
-                    cell_width * 2.0
-                } else {
-                    cell_width
-                };
-                backgrounds.push((
-                    Bounds::new(point(x, y), size(width, line_height)),
-                    palette.resolve(bg),
-                ));
+                backgrounds.push((cell_bounds, palette.resolve(bg)));
             }
             // alacritty keeps tabs in the grid (for copying); they occupy a normal cell.
             let ch = if cell.flags.contains(Flags::HIDDEN) || cell.c == '\t' {
@@ -153,6 +173,7 @@ impl Element for TerminalElement {
             }
         }
         drop(term);
+        backgrounds.extend(selections);
 
         let lines = rows_text
             .into_iter()

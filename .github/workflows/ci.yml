@@ -22,7 +22,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            .
+            src-tauri
 
       - run: npm ci
 
@@ -31,7 +33,14 @@ jobs:
 
       - run: npm test
 
-      - name: Rust checks
+      # Shared crates and the native app.
+      - name: Rust workspace checks
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      - name: Tauri app checks
         working-directory: src-tauri
         run: |
           cargo fmt --check
