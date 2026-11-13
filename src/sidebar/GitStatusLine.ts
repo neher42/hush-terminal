@@ -29,11 +29,9 @@ export class GitStatusLine {
 
     const changes = document.createElement('span');
     changes.className = 'git-changes';
-    if (status.files) {
-      changes.append(count(`${status.files} ${status.files === 1 ? 'file' : 'files'}`, 'git-files'));
-      if (status.added) changes.append(count(`+${status.added}`, 'git-added'));
-      if (status.removed) changes.append(count(`−${status.removed}`, 'git-removed'));
-    }
+    // The file count is only in the tooltip, so a long branch name keeps its room.
+    if (status.added) changes.append(count(`+${status.added}`, 'git-added'));
+    if (status.removed) changes.append(count(`−${status.removed}`, 'git-removed'));
 
     this.element.replaceChildren(branch, changes);
     this.element.title = describe(status);

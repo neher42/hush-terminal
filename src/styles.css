@@ -938,12 +938,21 @@ body {
 }
 
 .git-branch-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--fg2);
 }
 
 .git-changes {
+  flex: none;
+}
+
+.git-branch {
+  flex: 1;
+}
+
+.git-sync {
   flex: none;
 }
 
