@@ -123,11 +123,7 @@ pub fn render(state: PanelState, cx: &mut Context<Workspace>) -> AnyElement {
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(match state.permission {
-                            None => div().text_color(rgb(p.muted)).child("Checking…"),
-                            Some(true) => div().text_color(rgb(p.ansi[2])).child("Allowed"),
-                            Some(false) => div().text_color(rgb(p.ansi[1])).child("Not allowed"),
-                        })
+                        .child(permission(state.permission, p))
                         .child(
                             button("permission", p)
                                 .px(px(10.))
@@ -341,8 +337,23 @@ fn switch(
         .flex()
         .when(on, |el| el.justify_end())
         .rounded_full()
-        .bg(rgb(if on { p.accent } else { p.faint }))
-        .child(div().size(px(16.)).rounded_full().bg(rgb(0xffffff)))
+        .bg(if on {
+            rgb(p.accent).into()
+        } else {
+            faded(p.foreground, 0.18)
+        })
+        .child(
+            div()
+                .size(px(16.))
+                .rounded_full()
+                .bg(rgb(0xffffff))
+                .shadow(vec![gpui::BoxShadow {
+                    color: hsla(0., 0., 0., 0.25),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(2.),
+                    spread_radius: px(0.),
+                }]),
+        )
         .on_click(cx.listener(move |ws, _, window, cx| ws.update_settings(toggle, window, cx)))
 }
 
@@ -369,19 +380,25 @@ fn pins(s: &Settings, home: &str, p: &'static Palette, cx: &mut Context<Workspac
         };
         let action = |key: &str, text: &'static str, enabled: bool| {
             button(SharedString::from(format!("{key}-{i}")), p)
-                .w(px(26.))
-                .h(px(24.))
+                .w(px(24.))
+                .h(px(22.))
+                .text_size(px(12.))
                 .child(text)
-                .when(!enabled, |el| el.opacity(0.4))
+                .when(!enabled, |el| el.opacity(0.35))
         };
         let remove = path.clone();
         div()
             .flex()
             .items_center()
             .gap(px(6.))
+            .py(px(5.))
+            .pl(px(10.))
+            .pr(px(6.))
+            .when(i > 0, |el| el.border_t_1().border_color(rgb(p.line)))
             .child(
                 div()
-                    .font_family(FontChoice::Menlo.family())
+                    .flex_none()
+                    .font_family(FontChoice::JetBrainsMono.family())
                     .text_size(px(12.5))
                     .child(name),
             )
@@ -391,8 +408,7 @@ fn pins(s: &Settings, home: &str, p: &'static Palette, cx: &mut Context<Workspac
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_size(px(12.))
+                    .text_size(px(11.5))
                     .text_color(rgb(p.muted))
                     .child(display_path(parent_path(path), home)),
             )
@@ -418,6 +434,37 @@ fn pins(s: &Settings, home: &str, p: &'static Palette, cx: &mut Context<Workspac
         .flex_col()
         .gap(px(6.))
         .child(heading)
-        .children(rows)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .border_1()
+                .border_color(rgb(p.line))
+                .rounded(px(8.))
+                .children(rows),
+        )
         .into_any_element()
+}
+
+/// "Allowed" or "Not allowed", with a colored dot.
+fn permission(granted: Option<bool>, p: &Palette) -> impl IntoElement {
+    let (text, dot) = match granted {
+        None => ("Checking…", None),
+        Some(true) => ("Allowed", Some(0x2ea44f)),
+        Some(false) => ("Not allowed", Some(p.ansi[1])),
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(12.5))
+        .children(dot.map(|color| div().size(px(7.)).rounded_full().bg(rgb(color))))
+        .child(text)
+}
+
+fn faded(color: u32, alpha: f32) -> Hsla {
+    Hsla {
+        a: alpha,
+        ..rgb(color).into()
+    }
 }

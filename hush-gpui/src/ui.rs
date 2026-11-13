@@ -74,7 +74,20 @@ pub fn section_label(text: &str, palette: &Palette) -> Div {
         .text_size(px(10.5))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(palette.muted))
-        .child(text.to_uppercase())
+        .child(tracked(&text.to_uppercase()))
+}
+
+/// gpui has no letter spacing, so small caps labels get hair spaces between letters
+/// (about the 0.07em of the web version).
+fn tracked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 4);
+    for (i, ch) in text.chars().enumerate() {
+        if i > 0 {
+            out.push('\u{200A}');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// A borderless square button with an icon. Clicks don't take focus from the terminal.
