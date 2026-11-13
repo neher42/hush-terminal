@@ -4,10 +4,10 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+use crate::menu::AppearanceMenu;
 use hush_core::error::{Error, Result};
 use hush_core::files::DirEntry;
 use hush_core::git::GitStatus;
-use crate::menu::AppearanceMenu;
 use hush_core::pty::{CommandAction, PtyManager};
 use hush_core::{claude, executables, files, git, history, settings};
 

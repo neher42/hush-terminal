@@ -9,15 +9,32 @@ pub struct Mods {
 
 /// Bytes for a key press, or `None` for keys the terminal ignores.
 /// `app_cursor` is the DECCKM mode some programs (vim, less) switch on.
-pub fn to_bytes(key: &str, key_char: Option<&str>, mods: Mods, app_cursor: bool) -> Option<Vec<u8>> {
+pub fn to_bytes(
+    key: &str,
+    key_char: Option<&str>,
+    mods: Mods,
+    app_cursor: bool,
+) -> Option<Vec<u8>> {
     let csi = |code: &str| {
-        let prefix = if app_cursor && !mods.shift && !mods.alt && !mods.ctrl { "\x1bO" } else { "\x1b[" };
+        let prefix = if app_cursor && !mods.shift && !mods.alt && !mods.ctrl {
+            "\x1bO"
+        } else {
+            "\x1b["
+        };
         Some(format!("{prefix}{code}").into_bytes())
     };
     let named: Option<Vec<u8>> = match key {
         "enter" => Some(b"\r".to_vec()),
-        "backspace" => Some(if mods.alt { b"\x1b\x7f".to_vec() } else { b"\x7f".to_vec() }),
-        "tab" => Some(if mods.shift { b"\x1b[Z".to_vec() } else { b"\t".to_vec() }),
+        "backspace" => Some(if mods.alt {
+            b"\x1b\x7f".to_vec()
+        } else {
+            b"\x7f".to_vec()
+        }),
+        "tab" => Some(if mods.shift {
+            b"\x1b[Z".to_vec()
+        } else {
+            b"\t".to_vec()
+        }),
         "escape" => Some(b"\x1b".to_vec()),
         "up" => csi("A"),
         "down" => csi("B"),
@@ -48,7 +65,9 @@ pub fn to_bytes(key: &str, key_char: Option<&str>, mods: Mods, app_cursor: bool)
         };
     }
 
-    let text = key_char.map(str::to_owned).or_else(|| (key == "space").then(|| " ".to_owned()))?;
+    let text = key_char
+        .map(str::to_owned)
+        .or_else(|| (key == "space").then(|| " ".to_owned()))?;
     let mut bytes = Vec::with_capacity(text.len() + 1);
     if mods.alt {
         bytes.push(0x1b);
@@ -61,14 +80,24 @@ pub fn to_bytes(key: &str, key_char: Option<&str>, mods: Mods, app_cursor: bool)
 mod tests {
     use super::*;
 
-    const NONE: Mods = Mods { ctrl: false, alt: false, shift: false };
+    const NONE: Mods = Mods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+    };
 
     #[test]
     fn typed_text_and_special_keys() {
         assert_eq!(to_bytes("a", Some("a"), NONE, false), Some(b"a".to_vec()));
         assert_eq!(to_bytes("enter", None, NONE, false), Some(b"\r".to_vec()));
-        assert_eq!(to_bytes("backspace", None, NONE, false), Some(b"\x7f".to_vec()));
-        assert_eq!(to_bytes("space", Some(" "), NONE, false), Some(b" ".to_vec()));
+        assert_eq!(
+            to_bytes("backspace", None, NONE, false),
+            Some(b"\x7f".to_vec())
+        );
+        assert_eq!(
+            to_bytes("space", Some(" "), NONE, false),
+            Some(b" ".to_vec())
+        );
     }
 
     #[test]
@@ -87,6 +116,9 @@ mod tests {
     #[test]
     fn option_sends_escape_prefix() {
         let alt = Mods { alt: true, ..NONE };
-        assert_eq!(to_bytes("b", Some("b"), alt, false), Some(b"\x1bb".to_vec()));
+        assert_eq!(
+            to_bytes("b", Some("b"), alt, false),
+            Some(b"\x1bb".to_vec())
+        );
     }
 }

@@ -42,7 +42,12 @@ impl Dimensions for GridSize {
 
 impl From<GridSize> for WindowSize {
     fn from(s: GridSize) -> Self {
-        WindowSize { num_lines: s.rows, num_cols: s.cols, cell_width: s.cell_width, cell_height: s.cell_height }
+        WindowSize {
+            num_lines: s.rows,
+            num_cols: s.cols,
+            cell_width: s.cell_width,
+            cell_height: s.cell_height,
+        }
     }
 }
 
@@ -56,7 +61,10 @@ pub struct Terminal {
 
 impl Terminal {
     /// `command` replaces the login shell, e.g. for benchmarks (`hush-gpui -e cmd args`).
-    pub fn spawn(command: Option<(String, Vec<String>)>, size: GridSize) -> io::Result<(Self, UnboundedReceiver<Event>)> {
+    pub fn spawn(
+        command: Option<(String, Vec<String>)>,
+        size: GridSize,
+    ) -> io::Result<(Self, UnboundedReceiver<Event>)> {
         let (tx, rx) = unbounded();
         let listener = Listener(tx);
         let env = HashMap::from([
@@ -77,11 +85,22 @@ impl Terminal {
             ..Default::default()
         };
         let pty = tty::new(&options, size.into(), 0)?;
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, listener.clone())));
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            listener.clone(),
+        )));
         let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, false, false)?;
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
-        Ok((Self { term, notifier, size }, rx))
+        Ok((
+            Self {
+                term,
+                notifier,
+                size,
+            },
+            rx,
+        ))
     }
 
     pub fn write(&self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) {

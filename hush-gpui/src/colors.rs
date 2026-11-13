@@ -22,7 +22,9 @@ pub const LIGHT: Palette = Palette {
 impl Palette {
     pub fn resolve(&self, color: Color) -> Hsla {
         hsla(match color {
-            Color::Spec(rgb) => (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b),
+            Color::Spec(rgb) => {
+                (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
+            }
             Color::Indexed(i) => self.indexed(i),
             Color::Named(named) => self.named(named),
         })
