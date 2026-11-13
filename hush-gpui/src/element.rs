@@ -71,9 +71,14 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Frame {
-        let (font, font_size, palette) = {
+        let (font, font_size, palette, hovered) = {
             let view = self.view.read(cx);
-            (view.font.clone(), view.font_size, view.palette)
+            (
+                view.font.clone(),
+                view.font_size,
+                view.palette,
+                view.hovered,
+            )
         };
         let text_system = window.text_system().clone();
         let font_id = text_system.resolve_font(&font);
@@ -117,6 +122,22 @@ impl Element for TerminalElement {
         let mut rows_text: Vec<(String, Vec<TextRun>)> =
             vec![(String::new(), Vec::new()); rows as usize];
         let mut backgrounds = Vec::new();
+        if let Some(block) = hovered {
+            let first = (block.start.0 + offset).max(0);
+            let last = (block.end.0 + offset).min(i32::from(rows) - 1);
+            if first <= last {
+                backgrounds.push((
+                    Bounds::new(
+                        point(
+                            bounds.origin.x,
+                            bounds.origin.y + line_height * first as f32,
+                        ),
+                        size(bounds.size.width, line_height * (last - first + 1) as f32),
+                    ),
+                    gpui::rgb(palette.hover).into(),
+                ));
+            }
+        }
         let mut selections = Vec::new();
         for indexed in content.display_iter {
             let row = indexed.point.line.0 + offset;

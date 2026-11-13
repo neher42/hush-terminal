@@ -7,21 +7,31 @@ use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Point;
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::cell::Hyperlink;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use hush_core::events::{OscScanner, ShellEvent};
 use hush_core::pty::{CommandAction, PtyManager};
 
+use crate::blocks::Tag;
+
 /// What the PTY thread reports to the UI.
 pub enum Output {
     /// New output was parsed into the grid.
     Wakeup,
-    /// A shell marker and the cursor position at the moment it was printed.
-    Shell(ShellEvent, Point),
+    Shell(Marker),
     /// Replies, title changes and the like from the terminal emulator.
     Term(Event),
     Exit,
+}
+
+/// A shell marker, where the cursor was when it was printed, and the block
+/// (counted by prompts) it belongs to.
+pub struct Marker {
+    pub event: ShellEvent,
+    pub cursor: Point,
+    pub block: u64,
 }
 
 #[derive(Clone)]
@@ -75,6 +85,7 @@ struct Parser {
     awake: Arc<AtomicBool>,
     parser: Processor,
     scanner: OscScanner,
+    block: u64,
 }
 
 impl Parser {
@@ -88,8 +99,12 @@ impl Parser {
         for (end, event) in markers {
             self.parser.advance(&mut *term, &bytes[done..end]);
             done = end;
-            let cursor = term.grid().cursor.point;
-            let _ = self.tx.unbounded_send(Output::Shell(event, cursor));
+            tag_next(&mut term, &event, &mut self.block);
+            let _ = self.tx.unbounded_send(Output::Shell(Marker {
+                event,
+                cursor: term.grid().cursor.point,
+                block: self.block,
+            }));
         }
         self.parser.advance(&mut *term, &bytes[done..]);
         // A program that starts a synchronized update and never ends it shouldn't
@@ -107,6 +122,22 @@ impl Parser {
             let _ = self.tx.unbounded_send(Output::Wakeup);
         }
     }
+}
+
+/// Tags what the shell prints next: the prompt, nothing while the user types, and
+/// the padding after a command's output.
+fn tag_next(term: &mut Term<Listener>, event: &ShellEvent, block: &mut u64) {
+    let tag = match event {
+        ShellEvent::PromptStart => {
+            *block += 1;
+            Some(Tag::Prompt)
+        }
+        ShellEvent::CommandEnd { .. } => Some(Tag::End),
+        ShellEvent::CommandInputStart => None,
+        _ => return,
+    };
+    let link = tag.map(|tag| tag.link(*block));
+    term.grid_mut().cursor.template.set_hyperlink(link);
 }
 
 /// A shell session: the PTY, and the grid its output is parsed into.
@@ -140,6 +171,7 @@ impl Terminal {
             awake: Arc::clone(&awake),
             parser: Processor::new(),
             scanner: OscScanner::default(),
+            block: 0,
         };
         let exit = parser.tx.clone();
         let id = pty.spawn(
@@ -186,8 +218,18 @@ impl Terminal {
 
     /// Draws into the grid as if the shell had printed `sequence`.
     pub fn draw(&mut self, sequence: &str) {
+        self.draw_tagged(sequence, None);
+    }
+
+    /// Draws with every printed cell linked to `link`, leaving the shell's own
+    /// link (if it's in the middle of one) as it was.
+    pub fn draw_tagged(&mut self, sequence: &str, link: Option<Hyperlink>) {
         let mut term = self.term.lock();
+        let template = &mut term.grid_mut().cursor.template;
+        let shell_link = template.hyperlink();
+        template.set_hyperlink(link);
         self.local.advance(&mut *term, sequence.as_bytes());
+        term.grid_mut().cursor.template.set_hyperlink(shell_link);
     }
 
     pub fn cursor(&self) -> Point {

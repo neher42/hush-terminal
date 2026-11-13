@@ -1,6 +1,10 @@
+mod block_bar;
+mod blocks;
 mod colors;
 mod element;
+mod icons;
 mod keys;
+mod popup;
 mod prompt;
 mod terminal;
 mod view;
@@ -31,20 +35,22 @@ fn main() {
         .expect("failed to install the shell integration");
     let pty = Arc::new(PtyManager::new(integration, data_dir.join("sessions")));
 
-    Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1040.), px(640.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Hush".into()),
+    Application::new()
+        .with_assets(icons::Assets)
+        .run(move |cx: &mut App| {
+            let bounds = Bounds::centered(None, size(px(1040.), px(640.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Hush".into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
-        cx.open_window(options, |window, cx| {
-            cx.new(|cx| view::TerminalView::new(pty, run, window, cx))
-        })
-        .expect("failed to open the window");
-        cx.activate(true);
-    });
+            };
+            cx.open_window(options, |window, cx| {
+                cx.new(|cx| view::TerminalView::new(pty, run, window, cx))
+            })
+            .expect("failed to open the window");
+            cx.activate(true);
+        });
 }

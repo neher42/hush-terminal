@@ -6,16 +6,22 @@ use alacritty_terminal::index::{Boundary, Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use hush_complete::{
-    common_prefix, complete, completion_context, fits_here, CommandCatalog, FolderCheck,
-    HistoryBrowser, HistoryStore, Place, SystemSources,
+    common_prefix, complete, completion_context, fits_here, CommandCatalog, CompletionItem,
+    CompletionKind, FolderCheck, HistoryBrowser, HistoryStore, Place, SystemSources,
 };
 use hush_core::pty::CommandAction;
 use hush_editor::{
     highlight, is_incomplete, move_to_command_start, render_command_line, zsh_highlights, Cell,
-    Direction, EditorCommand, Layout, LineEditor, RenderInput, Unit,
+    Direction, EditorCommand, Layout, LineEditor, MenuAction, RenderInput, Unit,
 };
 
+use crate::blocks::Tag;
+use crate::icons::Icon;
 use crate::terminal::Terminal;
+
+/// Rows the menu shows at once.
+pub const MENU_ROWS: usize = 8;
+const HISTORY_RESULTS: usize = 100;
 
 /// What the editor needs from the rest of the app.
 pub struct Env<'a> {
@@ -40,6 +46,107 @@ pub struct PromptEditor {
     /// Restored at the next prompt after `run_command` replaced what was typed.
     stash: Option<String>,
     owns_selection: bool,
+    menu: Option<Menu>,
+    notice: Option<Notice>,
+    notices_shown: u64,
+    /// The block this prompt belongs to.
+    block: u64,
+}
+
+/// A command handed to the shell.
+pub struct Submitted {
+    pub block: u64,
+    pub command: String,
+}
+
+enum Choices {
+    Complete {
+        word_start: usize,
+        items: Vec<CompletionItem>,
+    },
+    History(Vec<String>),
+}
+
+impl Choices {
+    fn len(&self) -> usize {
+        match self {
+            Choices::Complete { items, .. } => items.len(),
+            Choices::History(items) => items.len(),
+        }
+    }
+}
+
+struct Menu {
+    choices: Choices,
+    selected: usize,
+    /// First visible row.
+    top: usize,
+}
+
+impl Menu {
+    fn new(choices: Choices) -> Self {
+        Self {
+            choices,
+            selected: 0,
+            top: 0,
+        }
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index;
+        if index < self.top {
+            self.top = index;
+        } else if index >= self.top + MENU_ROWS {
+            self.top = index + 1 - MENU_ROWS;
+        }
+    }
+
+    fn step(&mut self, direction: Direction) {
+        let len = self.choices.len();
+        if len > 0 {
+            let delta = if direction == Direction::Forward {
+                1
+            } else {
+                len - 1
+            };
+            self.select((self.selected + delta) % len);
+        }
+    }
+
+    fn replace(&mut self, choices: Choices) {
+        let len = choices.len();
+        self.choices = choices;
+        self.top = self.top.min(len.saturating_sub(MENU_ROWS));
+        self.select(self.selected.min(len.saturating_sub(1)));
+    }
+}
+
+/// A short message under the command, like "No matches".
+struct Notice {
+    text: String,
+    offset: usize,
+    id: u64,
+}
+
+/// The menu or notice as it should be drawn.
+pub struct Popup<'a> {
+    pub title: Option<String>,
+    pub rows: Vec<PopupRow<'a>>,
+    /// Shown instead of rows when there are none.
+    pub empty: &'a str,
+    pub hints: &'static [&'static str],
+    /// The grid cell it hangs from.
+    pub anchor: Point,
+}
+
+pub struct PopupRow<'a> {
+    pub index: usize,
+    pub label: &'a str,
+    /// Bytes at the start of `label` that match what was typed.
+    pub matched: usize,
+    pub detail: Option<&'a str>,
+    pub icon: Icon,
+    pub selected: bool,
 }
 
 impl PromptEditor {
@@ -48,7 +155,7 @@ impl PromptEditor {
     }
 
     /// zsh printed its prompt and waits for a command (OSC 133;B).
-    pub fn begin_input(&mut self, cursor: Point, env: &mut Env) {
+    pub fn begin_input(&mut self, cursor: Point, block: u64, env: &mut Env) {
         if env
             .terminal
             .term
@@ -58,6 +165,7 @@ impl PromptEditor {
         {
             return;
         }
+        self.block = block;
         self.start_col = cursor.column.0;
         self.at = Cell {
             row: 0,
@@ -76,13 +184,20 @@ impl PromptEditor {
     pub fn deactivate(&mut self) {
         self.active = false;
         self.drawn = false;
+        self.close_menu();
     }
 
-    /// Runs a key command. Returns the command line if one was started.
-    pub fn execute(&mut self, command: EditorCommand, env: &mut Env) -> Option<String> {
+    pub fn menu_open(&self) -> bool {
+        self.menu.is_some()
+    }
+
+    /// Runs a key command. Returns the command if one was handed to the shell.
+    pub fn execute(&mut self, command: EditorCommand, env: &mut Env) -> Option<Submitted> {
         if !matches!(command, EditorCommand::Vertical { .. }) {
             self.browser = None;
         }
+        self.notice = None;
+        let before = (self.editor.text().to_owned(), self.editor.cursor());
         let e = &mut self.editor;
         match command {
             EditorCommand::Submit if is_incomplete(e.text()) => e.insert("\n"),
@@ -96,6 +211,11 @@ impl PromptEditor {
                 return self.finish(&text, CommandAction::Cancel, env);
             }
             EditorCommand::Complete => self.complete(env),
+            EditorCommand::HistorySearch => {
+                let items = self.search_history(env);
+                self.menu = Some(Menu::new(Choices::History(items)));
+            }
+            EditorCommand::Menu(action) => self.menu_action(action),
             EditorCommand::ClearScreen => self.clear_screen(env),
             EditorCommand::Escape => {
                 e.clear_selection();
@@ -134,8 +254,9 @@ impl PromptEditor {
             EditorCommand::DeleteShellWord => {
                 e.delete_shell_word();
             }
-            // The history search and completion menus come with the menu UI.
-            EditorCommand::HistorySearch | EditorCommand::Menu(_) => {}
+        }
+        if (self.editor.text(), self.editor.cursor()) != (before.0.as_str(), before.1) {
+            self.refresh_menu(env);
         }
         self.render(env);
         None
@@ -155,11 +276,13 @@ impl PromptEditor {
         self.clear_foreign_selection(env);
         self.editor.insert(&text);
         self.browser = None;
+        self.notice = None;
+        self.refresh_menu(env);
         self.render(env);
     }
 
     /// Replaces what was typed with `command` and runs it.
-    pub fn run_command(&mut self, command: &str, env: &mut Env) -> Option<String> {
+    pub fn run_command(&mut self, command: &str, env: &mut Env) -> Option<Submitted> {
         if !self.active {
             return None;
         }
@@ -263,7 +386,7 @@ impl PromptEditor {
 
     /// A click inside the command moves the cursor there.
     pub fn click(&mut self, point: Point, env: &mut Env) {
-        let Some(cell) = self.cell_for(point, env) else {
+        let Some(cell) = self.cell_for(point, env.terminal) else {
             return;
         };
         let Some(layout) = &self.layout else {
@@ -271,6 +394,7 @@ impl PromptEditor {
         };
         self.editor.move_to(layout.offset_at(cell), false);
         self.browser = None;
+        self.refresh_menu(env);
         self.render(env);
     }
 
@@ -287,8 +411,8 @@ impl PromptEditor {
         };
         let offsets = range.and_then(|range| {
             let layout = self.layout.as_ref()?;
-            let a = layout.offset_at(self.cell_for(range.start, env)?);
-            let end = self.cell_for(range.end, env)?;
+            let a = layout.offset_at(self.cell_for(range.start, env.terminal)?);
+            let end = self.cell_for(range.end, env.terminal)?;
             let b = layout.offset_at(Cell {
                 col: end.col + 1,
                 ..end
@@ -308,8 +432,10 @@ impl PromptEditor {
         }
     }
 
-    fn finish(&mut self, command: &str, action: CommandAction, env: &mut Env) -> Option<String> {
+    fn finish(&mut self, command: &str, action: CommandAction, env: &mut Env) -> Option<Submitted> {
         self.release_selection(env);
+        self.close_menu();
+        let run = matches!(action, CommandAction::Run);
         let spans = highlight(command, |name| env.catalog.is_known(name), None);
         if self.drawn || !command.is_empty() {
             let out = render_command_line(&RenderInput {
@@ -321,7 +447,8 @@ impl PromptEditor {
                 cols: env.terminal.size().cols as usize,
                 from: self.at,
             });
-            env.terminal.draw(&out.sequence);
+            let tag = run.then(|| Tag::Command.link(self.block));
+            env.terminal.draw_tagged(&out.sequence, tag);
             self.at = out.cursor;
         }
         self.drawn = false;
@@ -330,7 +457,10 @@ impl PromptEditor {
         env.terminal
             .submit(command, &zsh_highlights(command, &spans), action);
         self.editor.reset("");
-        matches!(action, CommandAction::Run).then(|| command.to_owned())
+        run.then(|| Submitted {
+            block: self.block,
+            command: command.to_owned(),
+        })
     }
 
     fn move_vertical(&mut self, direction: Direction, extend: bool, env: &mut Env) {
@@ -368,7 +498,12 @@ impl PromptEditor {
         let e = &self.editor;
         let foreign_selection =
             !self.owns_selection && env.terminal.term.lock().selection.is_some();
-        if e.selection().is_some() || !e.cursor_at_end() || e.is_empty() || foreign_selection {
+        if e.selection().is_some()
+            || !e.cursor_at_end()
+            || e.is_empty()
+            || foreign_selection
+            || self.menu.is_some()
+        {
             return String::new();
         }
         let is_dir = |path: &str| Some(env.folders.is_dir(path, &SystemSources));
@@ -378,47 +513,236 @@ impl PromptEditor {
             .unwrap_or_default()
     }
 
-    /// Tab: completes a single match right away, or the part all matches share.
-    /// The menu for choosing between matches comes with the menu UI.
+    /// Tab: completes a single match right away, otherwise inserts the part all
+    /// matches share and opens the menu.
     fn complete(&mut self, env: &mut Env) {
         let e = &mut self.editor;
         let ctx = completion_context(e.text(), e.cursor());
         let items = complete(&ctx, env.place, &env.catalog.names(), &SystemSources);
-        let insert = match items.as_slice() {
-            [] => return,
-            [item] => format!(
-                "{}{}",
-                item.insert,
-                if item.append_space { " " } else { "" }
-            ),
+        match items.as_slice() {
+            [] => {
+                let text = if ctx.word.is_empty() {
+                    "Nothing to complete here".to_owned()
+                } else {
+                    format!("No matches for '{}'", ctx.word)
+                };
+                self.show_notice(text, ctx.word_start);
+            }
+            [item] => self.apply_completion(item, ctx.word_start),
             _ => {
                 let prefix = common_prefix(&items);
-                if prefix.len() <= ctx.raw_word.len() {
+                if prefix.len() > ctx.raw_word.len() {
+                    let prefix = prefix.to_owned();
+                    e.select(ctx.word_start, e.cursor());
+                    e.insert(&prefix);
+                }
+                self.menu = Some(Menu::new(Choices::Complete {
+                    word_start: ctx.word_start,
+                    items,
+                }));
+            }
+        }
+    }
+
+    fn apply_completion(&mut self, item: &CompletionItem, word_start: usize) {
+        let e = &mut self.editor;
+        e.select(word_start, e.cursor());
+        e.insert(&item.insert);
+        if item.append_space {
+            e.insert(" ");
+        }
+    }
+
+    fn search_history(&self, env: &Env) -> Vec<String> {
+        env.history
+            .search(self.editor.text(), HISTORY_RESULTS)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Follows what was typed while the menu is open.
+    fn refresh_menu(&mut self, env: &mut Env) {
+        let Some(menu) = &self.menu else {
+            return;
+        };
+        let e = &self.editor;
+        let choices = match &menu.choices {
+            Choices::History(_) => Choices::History(self.search_history(env)),
+            Choices::Complete { word_start, .. } => {
+                let typed = e.text().get(*word_start..e.cursor()).unwrap_or(" ");
+                if typed.replace("\\ ", "").contains(char::is_whitespace) {
+                    self.close_menu();
                     return;
                 }
-                prefix.to_owned()
+                let ctx = completion_context(e.text(), e.cursor());
+                let items = complete(&ctx, env.place, &env.catalog.names(), &SystemSources);
+                if items.is_empty() {
+                    self.close_menu();
+                    return;
+                }
+                Choices::Complete {
+                    word_start: ctx.word_start,
+                    items,
+                }
             }
         };
-        e.select(ctx.word_start, e.cursor());
-        e.insert(&insert);
+        if let Some(menu) = &mut self.menu {
+            menu.replace(choices);
+        }
+    }
+
+    fn menu_action(&mut self, action: MenuAction) {
+        let Some(menu) = &mut self.menu else {
+            return;
+        };
+        match action {
+            MenuAction::Next => menu.step(Direction::Forward),
+            MenuAction::Previous => menu.step(Direction::Backward),
+            MenuAction::Accept => {
+                let index = menu.selected;
+                self.accept(index);
+            }
+            MenuAction::Close => self.close_menu(),
+        }
+    }
+
+    /// A menu item was chosen with the mouse.
+    pub fn pick(&mut self, index: usize, env: &mut Env) {
+        self.accept(index);
+        self.refresh_menu(env);
+        self.render(env);
+    }
+
+    fn accept(&mut self, index: usize) {
+        let Some(menu) = self.menu.take() else {
+            return;
+        };
+        match menu.choices {
+            Choices::History(items) => {
+                if let Some(entry) = items.get(index) {
+                    self.editor.set_text(entry);
+                }
+            }
+            Choices::Complete { word_start, items } => {
+                if let Some(item) = items.get(index) {
+                    self.apply_completion(item, word_start);
+                }
+            }
+        }
+    }
+
+    pub fn close_menu(&mut self) {
+        self.menu = None;
+        self.notice = None;
+    }
+
+    fn show_notice(&mut self, text: String, offset: usize) {
+        self.notices_shown += 1;
+        self.notice = Some(Notice {
+            text,
+            offset,
+            id: self.notices_shown,
+        });
+    }
+
+    /// Identifies the notice on screen, so a timer can hide that one.
+    pub fn notice_id(&self) -> Option<u64> {
+        self.notice.as_ref().map(|n| n.id)
+    }
+
+    pub fn dismiss_notice(&mut self, id: u64) {
+        if self.notice_id() == Some(id) {
+            self.notice = None;
+        }
+    }
+
+    /// The menu or notice to draw, if any.
+    pub fn popup(&self, terminal: &Terminal) -> Option<Popup<'_>> {
+        if !self.active {
+            return None;
+        }
+        if let Some(notice) = &self.notice {
+            return Some(Popup {
+                title: None,
+                rows: Vec::new(),
+                empty: &notice.text,
+                hints: &[],
+                anchor: self.anchor(notice.offset, terminal)?,
+            });
+        }
+        let menu = self.menu.as_ref()?;
+        let visible = menu.top..(menu.top + MENU_ROWS).min(menu.choices.len());
+        let row = |index: usize, label, matched, detail, icon| PopupRow {
+            index,
+            label,
+            matched,
+            detail,
+            icon,
+            selected: index == menu.selected,
+        };
+        Some(match &menu.choices {
+            Choices::History(items) => {
+                let query = self.editor.text().trim();
+                Popup {
+                    title: Some(if query.is_empty() {
+                        "History".to_owned()
+                    } else {
+                        format!("History matching '{query}'")
+                    }),
+                    rows: visible
+                        .map(|i| row(i, items[i].as_str(), 0, None, Icon::History))
+                        .collect(),
+                    empty: "No matching commands in your history",
+                    hints: &["type to filter", "↑↓ choose", "↩ use", "esc close"],
+                    anchor: self.anchor(0, terminal)?,
+                }
+            }
+            Choices::Complete { word_start, items } => Popup {
+                title: None,
+                rows: visible
+                    .map(|i| {
+                        let item = &items[i];
+                        row(
+                            i,
+                            &item.label,
+                            item.matched,
+                            item.detail,
+                            icon_for(item.kind),
+                        )
+                    })
+                    .collect(),
+                empty: "No completions",
+                hints: &["↑↓ choose", "⇥ or ↩ accept", "esc close"],
+                anchor: self.anchor(*word_start, terminal)?,
+            },
+        })
+    }
+
+    fn anchor(&self, offset: usize, terminal: &Terminal) -> Option<Point> {
+        let layout = self.layout.as_ref()?;
+        Some(self.point_for(
+            layout.cell_at(offset.min(self.editor.text().len())),
+            terminal,
+        ))
     }
 
     /// Grid line of the command's first row.
-    fn start_line(&self, env: &Env) -> i32 {
-        env.terminal.cursor().line.0 - self.at.row as i32
+    fn start_line(&self, terminal: &Terminal) -> i32 {
+        terminal.cursor().line.0 - self.at.row as i32
     }
 
-    fn cell_for(&self, point: Point, env: &Env) -> Option<Cell> {
-        let row = point.line.0 - self.start_line(env);
+    fn cell_for(&self, point: Point, terminal: &Terminal) -> Option<Cell> {
+        let row = point.line.0 - self.start_line(terminal);
         (row >= 0).then_some(Cell {
             row: row as usize,
             col: point.column.0,
         })
     }
 
-    fn point_for(&self, cell: Cell, env: &Env) -> Point {
+    fn point_for(&self, cell: Cell, terminal: &Terminal) -> Point {
         Point::new(
-            Line(self.start_line(env) + cell.row as i32),
+            Line(self.start_line(terminal) + cell.row as i32),
             Column(cell.col),
         )
     }
@@ -430,8 +754,8 @@ impl PromptEditor {
             self.release_selection(env);
             return;
         };
-        let start = self.point_for(layout.cell_at(range.start), env);
-        let end = self.point_for(layout.cell_at(range.end), env);
+        let start = self.point_for(layout.cell_at(range.start), env.terminal);
+        let end = self.point_for(layout.cell_at(range.end), env.terminal);
         let mut term = env.terminal.term.lock();
         let last = end.sub(&*term, Boundary::Grid, 1);
         let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
@@ -451,6 +775,16 @@ impl PromptEditor {
         if !self.owns_selection {
             env.terminal.term.lock().selection = None;
         }
+    }
+}
+
+fn icon_for(kind: CompletionKind) -> Icon {
+    match kind {
+        CompletionKind::Command | CompletionKind::Subcommand => Icon::Prompt,
+        CompletionKind::Folder => Icon::Folder,
+        CompletionKind::File => Icon::File,
+        CompletionKind::Branch => Icon::Branch,
+        CompletionKind::Flag => Icon::Flag,
     }
 }
 

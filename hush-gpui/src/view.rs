@@ -8,30 +8,37 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use futures::StreamExt;
 use gpui::{
-    div, prelude::*, px, ClipboardItem, Context, FocusHandle, Font, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollWheelEvent, Task, Window,
+    div, point, prelude::*, px, size, Bounds, ClipboardItem, Context, FocusHandle, Font,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    ScrollWheelEvent, SharedString, Task, Window,
 };
 use hush_complete::{CommandCatalog, FolderCheck, HistoryStore, Place};
+use hush_core::claude::{self, Delivery};
 use hush_core::events::ShellEvent;
 use hush_core::executables::list_executables;
 use hush_core::history::read_zsh_history;
 use hush_core::pty::PtyManager;
 use hush_editor::{resolve_key, Key};
 
+use crate::block_bar::{self, BlockAction};
+use crate::blocks::{self, Block, BlockLog};
 use crate::colors::{Palette, LIGHT};
 use crate::element::{Geometry, TerminalElement};
 use crate::keys::{self, Mods};
-use crate::prompt::{Env, PromptEditor};
-use crate::terminal::{GridSize, Output, Terminal};
+use crate::popup;
+use crate::prompt::{Env, PromptEditor, Submitted};
+use crate::terminal::{GridSize, Marker, Output, Terminal};
 
 const PADDING: f32 = 8.0;
 /// How long to wait for zsh to redraw its prompt after a resize before drawing the
 /// command again ourselves.
 const REDRAW_FALLBACK: Duration = Duration::from_millis(250);
+const NOTICE_TIME: Duration = Duration::from_millis(1600);
 
 pub struct TerminalView {
     pub(crate) terminal: Terminal,
     prompt: PromptEditor,
+    blocks: BlockLog,
     history: HistoryStore,
     catalog: CommandCatalog,
     folders: FolderCheck,
@@ -42,8 +49,15 @@ pub struct TerminalView {
     pub(crate) font_size: Pixels,
     pub(crate) palette: &'static Palette,
     geometry: Option<Geometry>,
+    /// The mouse went down on the terminal itself (not on a button or menu).
+    pressed: bool,
     /// Where a mouse drag started; the selection begins once the mouse moves.
     drag_start: Option<(Point, Side)>,
+    mouse: Option<gpui::Point<Pixels>>,
+    /// The block under the mouse, which shows its buttons.
+    pub(crate) hovered: Option<Block>,
+    toast: Option<(SharedString, Task<()>)>,
+    notice_timer: Option<(u64, Task<()>)>,
     /// Fractional lines left over from smooth scrolling.
     scroll_remainder: f32,
     redraw_fallback: Option<Task<()>>,
@@ -81,6 +95,7 @@ impl TerminalView {
                     for item in batch {
                         view.handle_output(item, cx);
                     }
+                    view.update_hover();
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -95,6 +110,7 @@ impl TerminalView {
         Self {
             terminal,
             prompt: PromptEditor::default(),
+            blocks: BlockLog::default(),
             history: HistoryStore::default(),
             catalog: CommandCatalog::default(),
             folders: FolderCheck::default(),
@@ -105,7 +121,12 @@ impl TerminalView {
             font_size: px(13.5),
             palette: &LIGHT,
             geometry: None,
+            pressed: false,
             drag_start: None,
+            mouse: None,
+            hovered: None,
+            toast: None,
+            notice_timer: None,
             scroll_remainder: 0.0,
             redraw_fallback: None,
             pending_run: run,
@@ -130,24 +151,32 @@ impl TerminalView {
     fn handle_output(&mut self, output: Output, cx: &mut Context<Self>) {
         match output {
             Output::Wakeup => self.terminal.woke(),
-            Output::Shell(event, cursor) => self.handle_shell_event(event, cursor, cx),
+            Output::Shell(marker) => self.handle_shell_event(marker, cx),
             Output::Term(Event::PtyWrite(text)) => self.terminal.write(text.as_bytes()),
             Output::Term(_) => {}
             Output::Exit => cx.quit(),
         }
     }
 
-    fn handle_shell_event(&mut self, event: ShellEvent, cursor: Point, cx: &mut Context<Self>) {
+    fn handle_shell_event(&mut self, marker: Marker, cx: &mut Context<Self>) {
+        let Marker {
+            event,
+            cursor,
+            block,
+        } = marker;
         match event {
             ShellEvent::CommandInputStart => {
                 self.redraw_fallback = None;
-                self.with_prompt(|prompt, env| prompt.begin_input(cursor, env));
+                self.with_prompt(|prompt, env| prompt.begin_input(cursor, block, env));
                 if let Some(command) = self.pending_run.take() {
                     self.run(&command);
                 }
             }
             ShellEvent::CommandStart => self.prompt.deactivate(),
-            ShellEvent::CommandEnd { .. } => self.folders.clear(),
+            ShellEvent::CommandEnd { exit_code } => {
+                self.blocks.finished(block, exit_code);
+                self.folders.clear();
+            }
             ShellEvent::Cwd { path, .. } => self.cwd = path,
             ShellEvent::Meta { key, value } => match key.as_str() {
                 "histfile" => {
@@ -180,9 +209,103 @@ impl TerminalView {
     }
 
     fn run(&mut self, command: &str) {
-        if let Some(ran) = self.with_prompt(|prompt, env| prompt.run_command(command, env)) {
-            self.history.add(&ran);
+        let submitted = self.with_prompt(|prompt, env| prompt.run_command(command, env));
+        self.submitted(submitted);
+    }
+
+    fn submitted(&mut self, submitted: Option<Submitted>) {
+        if let Some(Submitted { block, command }) = submitted {
+            self.history.add(&command);
+            self.blocks.ran(block, command);
         }
+    }
+
+    /// A menu item was clicked.
+    pub(crate) fn pick(&mut self, index: usize) {
+        self.with_prompt(|prompt, env| prompt.pick(index, env));
+    }
+
+    pub(crate) fn block_action(&mut self, action: BlockAction, cx: &mut Context<Self>) {
+        let Some(block) = self.hovered else {
+            return;
+        };
+        let Some(ran) = self.blocks.get(block.id).cloned() else {
+            return;
+        };
+        let output = || blocks::output_text(&self.terminal.term.lock(), &block);
+        match action {
+            BlockAction::CopyOutput => self.copy(output(), "Copied output", cx),
+            BlockAction::CopyCommand => self.copy(ran.command, "Copied command", cx),
+            BlockAction::RunAgain => self.run(&ran.command),
+            BlockAction::SendToClaude => {
+                let text = blocks::transcript(&ran, &output());
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                let delivery = cx.background_executor().spawn(async { claude::deliver() });
+                cx.spawn(async move |this, cx| {
+                    if let Delivery::Copied { message } = delivery.await {
+                        let _ = this.update(cx, |view, cx| view.show_toast(message, cx));
+                    }
+                })
+                .detach();
+            }
+        }
+        cx.notify();
+    }
+
+    fn copy(&mut self, text: String, confirmation: &'static str, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.show_toast(confirmation, cx);
+    }
+
+    fn show_toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let hide = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_TIME).await;
+            let _ = this.update(cx, |view, cx| {
+                view.toast = None;
+                cx.notify();
+            });
+        });
+        self.toast = Some((text.into(), hide));
+        cx.notify();
+    }
+
+    /// Hides a "No matches" notice after a moment.
+    fn watch_notice(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.prompt.notice_id() else {
+            return;
+        };
+        if self
+            .notice_timer
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == id)
+        {
+            return;
+        }
+        let hide = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_TIME).await;
+            let _ = this.update(cx, |view, cx| {
+                view.prompt.dismiss_notice(id);
+                cx.notify();
+            });
+        });
+        self.notice_timer = Some((id, hide));
+    }
+
+    /// Finds the block under the mouse. Returns whether it changed.
+    fn update_hover(&mut self) -> bool {
+        let hovered = self.mouse.and_then(|position| {
+            let (point, _) = self.point_at(position)?;
+            let term = self.terminal.term.lock();
+            if term.mode().contains(TermMode::ALT_SCREEN) {
+                return None;
+            }
+            let block = blocks::block_at(&term, point.line)?;
+            let ran = self.blocks.get(block.id)?;
+            (!ran.command.is_empty()).then_some(block)
+        });
+        let changed = hovered != self.hovered;
+        self.hovered = hovered;
+        changed
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -203,16 +326,16 @@ impl TerminalView {
                 shift: m.shift,
                 cmd: m.platform,
             };
-            if let Some(command) = resolve_key(&key, false) {
-                if let Some(ran) = self.with_prompt(|prompt, env| prompt.execute(command, env)) {
-                    self.history.add(&ran);
-                }
+            if let Some(command) = resolve_key(&key, self.prompt.menu_open()) {
+                let submitted = self.with_prompt(|prompt, env| prompt.execute(command, env));
+                self.submitted(submitted);
             } else if let Some(text) = keystroke.key_char.as_deref() {
                 if !m.control && !m.platform {
                     let text = text.to_owned();
                     self.with_prompt(|prompt, env| prompt.insert(&text, env));
                 }
             }
+            self.watch_notice(cx);
             cx.stop_propagation();
             cx.notify();
             return;
@@ -335,6 +458,13 @@ impl TerminalView {
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
+        self.pressed = true;
+        if self.prompt.menu_open() {
+            self.with_prompt(|prompt, env| {
+                prompt.close_menu();
+                prompt.render(env);
+            });
+        }
         let Some((point, side)) = self.point_at(event.position) else {
             return;
         };
@@ -351,7 +481,11 @@ impl TerminalView {
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if event.pressed_button != Some(MouseButton::Left) {
+        self.mouse = Some(event.position);
+        if self.update_hover() {
+            cx.notify();
+        }
+        if event.pressed_button != Some(MouseButton::Left) || !self.pressed {
             return;
         }
         let Some((point, side)) = self.point_at(event.position) else {
@@ -371,6 +505,9 @@ impl TerminalView {
     }
 
     fn mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.pressed) {
+            return;
+        }
         self.drag_start = None;
         let has_selection = self.terminal.term.lock().selection.is_some();
         if has_selection {
@@ -410,13 +547,74 @@ impl TerminalView {
                 .lock()
                 .scroll_display(Scroll::Delta(lines));
         }
+        self.update_hover();
         cx.notify();
+    }
+
+    fn hover_changed(&mut self, hovered: &bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if !hovered {
+            self.mouse = None;
+            self.update_hover();
+            cx.notify();
+        }
+    }
+
+    /// The grid's area in the window, and the bounds of one of its cells.
+    fn cell_bounds(&self, cell: Point) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+        let g = self.geometry?;
+        let offset = self.terminal.term.lock().grid().display_offset() as i32;
+        let area = Bounds::new(
+            g.origin,
+            size(
+                g.cell_width * f32::from(g.grid.cols),
+                g.line_height * f32::from(g.grid.rows),
+            ),
+        );
+        let cell = Bounds::new(
+            point(
+                g.origin.x + g.cell_width * cell.column.0 as f32,
+                g.origin.y + g.line_height * (cell.line.0 + offset) as f32,
+            ),
+            size(g.cell_width, g.line_height),
+        );
+        Some((area, cell))
+    }
+
+    fn render_popup(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let popup = self.prompt.popup(&self.terminal)?;
+        let (area, anchor) = self.cell_bounds(popup.anchor)?;
+        let font = self.font.family.clone();
+        Some(popup::render(popup, anchor, area, self.palette, font, cx))
+    }
+
+    fn render_block_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let block = self.hovered?;
+        let g = self.geometry?;
+        let offset = self.terminal.term.lock().grid().display_offset() as i32;
+        let row = (block.start.0 + offset).max(0);
+        let top = g.line_height * row as f32 + px(1.);
+        Some(block_bar::render(
+            top,
+            block.end > block.head_end,
+            self.palette,
+            cx,
+        ))
     }
 }
 
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let toast = self.toast.as_ref().map(|(text, _)| {
+            div()
+                .absolute()
+                .bottom(px(16.))
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(block_bar::label(text.clone(), self.palette))
+        });
         div()
+            .id("terminal")
             .size_full()
             .p(px(PADDING))
             .bg(self.palette.background())
@@ -426,6 +624,15 @@ impl Render for TerminalView {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_scroll_wheel(cx.listener(Self::scroll))
-            .child(TerminalElement { view: cx.entity() })
+            .on_hover(cx.listener(Self::hover_changed))
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .child(TerminalElement { view: cx.entity() })
+                    .children(self.render_block_bar(cx))
+                    .children(toast),
+            )
+            .children(self.render_popup(cx))
     }
 }

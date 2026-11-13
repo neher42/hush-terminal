@@ -9,6 +9,15 @@ pub struct Palette {
     pub selection: u32,
     pub selection_alpha: f32,
     pub ansi: [u32; 16],
+    pub line: u32,
+    pub muted: u32,
+    pub accent: u32,
+    /// Faint wash behind a hovered command.
+    pub hover: u32,
+    pub menu: u32,
+    pub menu_selected: u32,
+    pub tooltip: u32,
+    pub tooltip_text: u32,
 }
 
 pub const LIGHT: Palette = Palette {
@@ -21,6 +30,14 @@ pub const LIGHT: Palette = Palette {
         0x1b1e23, 0xcc3a2f, 0x25804b, 0xa2670a, 0x2a63c7, 0x8a4ec2, 0x1b7f8c, 0xc9ced6, //
         0xa9afb8, 0xcc3a2f, 0x25804b, 0xa2670a, 0x2a63c7, 0x8a4ec2, 0x1b7f8c, 0x1b1e23,
     ],
+    line: 0xe2e5ea,
+    muted: 0x878e99,
+    accent: 0x2a63c7,
+    hover: 0xf6f7f9,
+    menu: 0xffffff,
+    menu_selected: 0xe7eefa,
+    tooltip: 0x1b1e23,
+    tooltip_text: 0xffffff,
 };
 
 impl Palette {
