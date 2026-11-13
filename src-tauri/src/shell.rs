@@ -32,8 +32,16 @@ impl ShellIntegration {
     }
 
     pub fn command(&self, cwd: Option<&Path>, command_file: &Path) -> CommandBuilder {
-        let shell = user_shell();
-        let mut cmd = CommandBuilder::new(&shell);
+        self.command_for_shell(&user_shell(), cwd, command_file)
+    }
+
+    fn command_for_shell(
+        &self,
+        shell: &Path,
+        cwd: Option<&Path>,
+        command_file: &Path,
+    ) -> CommandBuilder {
+        let mut cmd = CommandBuilder::new(shell);
         cmd.arg("-l");
 
         cmd.env("TERM", TERM);
@@ -97,8 +105,9 @@ mod tests {
         fs::write(user_zdotdir.join(".zshrc"), "PS1='test> '\n").unwrap();
         let command_file = dir.path().join("1.cmd");
 
-        let mut cmd = integration.command(Some(dir.path()), &command_file);
-        cmd.get_argv_mut()[0] = "/bin/zsh".into();
+        // Pass zsh explicitly: CI runners may have a different login shell.
+        let mut cmd =
+            integration.command_for_shell(Path::new("/bin/zsh"), Some(dir.path()), &command_file);
         cmd.env("HUSH_USER_ZDOTDIR", &user_zdotdir);
         cmd.env("HISTFILE", dir.path().join("history"));
 
