@@ -1,0 +1,6 @@
+if [[ -f "$HUSH_USER_ZDOTDIR/.zprofile" ]]; then
+  ZDOTDIR=$HUSH_USER_ZDOTDIR
+  builtin source "$HUSH_USER_ZDOTDIR/.zprofile"
+  HUSH_USER_ZDOTDIR=$ZDOTDIR
+  ZDOTDIR=$HUSH_ZDOTDIR
+fi

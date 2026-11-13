@@ -1,0 +1,103 @@
+use std::path::PathBuf;
+
+use tauri::ipc::{Channel, Response};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+
+use crate::error::{Error, Result};
+use crate::files::DirEntry;
+use crate::pty::{CommandAction, PtyManager};
+use crate::{claude, completion, files, history, settings};
+
+#[tauri::command]
+pub fn pty_spawn(
+    pty: State<'_, PtyManager>,
+    cols: u16,
+    rows: u16,
+    cwd: Option<PathBuf>,
+    on_data: Channel<Response>,
+    on_exit: Channel<u32>,
+) -> Result<u32> {
+    pty.spawn(cols, rows, cwd.as_deref(), on_data, on_exit)
+}
+
+#[tauri::command]
+pub fn pty_write(pty: State<'_, PtyManager>, id: u32, data: String) -> Result<()> {
+    pty.write(id, data.as_bytes())
+}
+
+#[tauri::command]
+pub fn pty_submit_command(
+    pty: State<'_, PtyManager>,
+    id: u32,
+    command: String,
+    highlights: String,
+    action: CommandAction,
+) -> Result<()> {
+    pty.submit_command(id, &command, &highlights, action)
+}
+
+#[tauri::command]
+pub fn pty_resize(pty: State<'_, PtyManager>, id: u32, cols: u16, rows: u16) -> Result<()> {
+    pty.resize(id, cols, rows)
+}
+
+#[tauri::command]
+pub fn pty_kill(pty: State<'_, PtyManager>, id: u32) -> Result<()> {
+    pty.kill(id)
+}
+
+#[tauri::command]
+pub fn home_dir() -> Result<PathBuf> {
+    dirs::home_dir().ok_or_else(|| Error::Message("Couldn't find your home folder.".into()))
+}
+
+#[tauri::command]
+pub async fn list_dir(path: PathBuf) -> Result<Vec<DirEntry>> {
+    files::list_dir(&path)
+}
+
+#[tauri::command]
+pub async fn is_dir(path: PathBuf) -> bool {
+    path.is_dir()
+}
+
+#[tauri::command]
+pub async fn read_history(path: PathBuf) -> Vec<String> {
+    history::read_zsh_history(&path)
+}
+
+#[tauri::command]
+pub async fn list_executables(path_var: String) -> Vec<String> {
+    completion::list_executables(&path_var)
+}
+
+#[tauri::command]
+pub async fn git_branches(cwd: PathBuf) -> Vec<String> {
+    completion::git_branches(&cwd)
+}
+
+#[tauri::command]
+pub async fn read_settings(app: AppHandle) -> Result<Option<String>> {
+    settings::read(&settings_path(&app)?)
+}
+
+#[tauri::command]
+pub async fn write_settings(app: AppHandle, json: String) -> Result<()> {
+    settings::write(&settings_path(&app)?, &json)
+}
+
+fn settings_path(app: &AppHandle) -> Result<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("settings.json"))
+        .map_err(|err| Error::Message(err.to_string()))
+}
+
+#[tauri::command]
+pub async fn send_to_claude(app: AppHandle, text: String) -> Result<claude::Delivery> {
+    app.clipboard()
+        .write_text(text)
+        .map_err(|err| Error::Message(err.to_string()))?;
+    Ok(claude::deliver())
+}
