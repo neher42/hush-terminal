@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 pub fn list_executables(path_var: &str) -> Vec<String> {
     let mut names = BTreeSet::new();
@@ -31,21 +30,6 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-pub fn git_branches(cwd: &Path) -> Vec<String> {
-    let output = Command::new("git")
-        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
-        .current_dir(cwd)
-        .output();
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(str::to_owned)
-            .filter(|line| !line.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,11 +45,5 @@ mod tests {
         fs::write(dir.path().join("notes.txt"), "").unwrap();
         let path_var = format!("{}::/does/not/exist", dir.path().display());
         assert_eq!(list_executables(&path_var), vec!["tool"]);
-    }
-
-    #[test]
-    fn no_branches_outside_a_repository() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(git_branches(dir.path()).is_empty());
     }
 }

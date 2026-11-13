@@ -8,6 +8,17 @@ export interface DirEntry {
 
 export type ClaudeDelivery = { result: 'pasted' } | { result: 'copied'; message: string };
 
+export interface GitStatus {
+  branch: string | null;
+  commit: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  files: number;
+  added: number;
+  removed: number;
+}
+
 export const backend = {
   homeDir: () => invoke<string>('home_dir'),
   listDir: (path: string) => invoke<DirEntry[]>('list_dir', { path }),
@@ -15,6 +26,7 @@ export const backend = {
   readHistory: (path: string) => invoke<string[]>('read_history', { path }),
   listExecutables: (pathVar: string) => invoke<string[]>('list_executables', { pathVar }),
   gitBranches: (cwd: string) => invoke<string[]>('git_branches', { cwd }),
+  gitStatus: (cwd: string) => invoke<GitStatus | null>('git_status', { cwd }),
   sendToClaude: (text: string) => invoke<ClaudeDelivery>('send_to_claude', { text }),
   readSettings: () => invoke<string | null>('read_settings'),
   writeSettings: (json: string) => invoke<void>('write_settings', { json }),

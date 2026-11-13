@@ -8,6 +8,7 @@ describe('normalizeSettings', () => {
       font: 'jetbrains-mono',
       appearance: 'system',
       sidebarVisible: true,
+      showGitStatus: true,
       pinnedFolders: [],
     });
     expect(normalizeSettings({ fontSize: 'big', appearance: 'blue', sidebarVisible: 1 })).toEqual({
@@ -15,13 +16,15 @@ describe('normalizeSettings', () => {
       font: 'jetbrains-mono',
       appearance: 'system',
       sidebarVisible: true,
+      showGitStatus: true,
       pinnedFolders: [],
     });
     expect(normalizeSettings({ font: 'comic-sans' }).font).toBe('jetbrains-mono');
   });
 
   it('keeps valid values and clamps the font size', () => {
-    expect(normalizeSettings({ fontSize: 40, font: 'menlo', appearance: 'dark', sidebarVisible: false })).toMatchObject({
+    expect(normalizeSettings({ fontSize: 40, font: 'menlo', appearance: 'dark', sidebarVisible: false, showGitStatus: false })).toMatchObject({
+      showGitStatus: false,
       fontSize: 28,
       font: 'menlo',
       appearance: 'dark',

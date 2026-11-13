@@ -4,6 +4,7 @@ mod completion;
 mod error;
 mod files;
 mod fsutil;
+mod git;
 mod history;
 mod menu;
 mod pty;
@@ -39,6 +40,7 @@ pub fn run() {
             commands::read_history,
             commands::list_executables,
             commands::git_branches,
+            commands::git_status,
             commands::send_to_claude,
             commands::read_settings,
             commands::write_settings,

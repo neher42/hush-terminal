@@ -14,13 +14,14 @@ export interface Settings {
   font: FontChoice;
   appearance: Appearance;
   sidebarVisible: boolean;
+  showGitStatus: boolean;
   /** Absolute paths, in the order they show in the sidebar. */
   pinnedFolders: string[];
 }
 
 export const DEFAULT_FONT_SIZE = 13.5;
 export const FONT_SIZE_RANGE = { min: 9, max: 28 } as const;
-const DEFAULTS: Settings = { fontSize: DEFAULT_FONT_SIZE, font: 'jetbrains-mono', appearance: 'system', sidebarVisible: true, pinnedFolders: [] };
+const DEFAULTS: Settings = { fontSize: DEFAULT_FONT_SIZE, font: 'jetbrains-mono', appearance: 'system', sidebarVisible: true, showGitStatus: true, pinnedFolders: [] };
 const APPEARANCES: readonly Appearance[] = ['system', 'light', 'dark'];
 const LEGACY_STORAGE_KEY = 'hush.settings';
 
@@ -49,6 +50,7 @@ export function normalizeSettings(raw: unknown): Settings {
     font: typeof value.font === 'string' && value.font in FONTS ? (value.font as FontChoice) : DEFAULTS.font,
     appearance: APPEARANCES.includes(value.appearance as Appearance) ? (value.appearance as Appearance) : DEFAULTS.appearance,
     sidebarVisible: typeof value.sidebarVisible === 'boolean' ? value.sidebarVisible : DEFAULTS.sidebarVisible,
+    showGitStatus: typeof value.showGitStatus === 'boolean' ? value.showGitStatus : DEFAULTS.showGitStatus,
     pinnedFolders: [...new Set(pinned.filter((p): p is string => typeof p === 'string' && p.startsWith('/')))],
   };
 }

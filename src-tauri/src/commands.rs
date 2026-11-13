@@ -6,9 +6,10 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::error::{Error, Result};
 use crate::files::DirEntry;
+use crate::git::GitStatus;
 use crate::menu::AppearanceMenu;
 use crate::pty::{CommandAction, PtyManager};
-use crate::{claude, completion, files, history, settings};
+use crate::{claude, completion, files, git, history, settings};
 
 #[tauri::command]
 pub fn pty_spawn(
@@ -75,7 +76,12 @@ pub async fn list_executables(path_var: String) -> Vec<String> {
 
 #[tauri::command]
 pub async fn git_branches(cwd: PathBuf) -> Vec<String> {
-    completion::git_branches(&cwd)
+    git::branches(&cwd)
+}
+
+#[tauri::command]
+pub async fn git_status(cwd: PathBuf) -> Option<GitStatus> {
+    git::status(&cwd)
 }
 
 #[tauri::command]

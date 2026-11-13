@@ -108,7 +108,7 @@ export class SettingsPanel {
         ),
       ]),
       section('Text', [this.fontSizeRow(s), this.fontRow(s)]),
-      section('Sidebar', [this.sidebarRow(s), this.pinnedList(s)]),
+      section('Sidebar', [this.sidebarRow(s), this.gitRow(s), this.pinnedList(s)]),
       section('Send to Claude', [this.permissionRow()]),
     );
     if (focusKey) this.backdrop.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
@@ -140,17 +140,11 @@ export class SettingsPanel {
   }
 
   private sidebarRow(s: Settings): HTMLElement {
-    const label = document.createElement('label');
-    label.className = 'switch';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = s.sidebarVisible;
-    input.dataset.key = 'sidebar';
-    input.addEventListener('change', () => this.deps.update({ sidebarVisible: input.checked }));
-    const track = document.createElement('span');
-    track.className = 'switch-track';
-    label.append(input, track);
-    return row('Show folder tree', label, '⌘B');
+    return row('Show folder tree', toggle('sidebar', s.sidebarVisible, (sidebarVisible) => this.deps.update({ sidebarVisible })), '⌘B');
+  }
+
+  private gitRow(s: Settings): HTMLElement {
+    return row('Show git status', toggle('git', s.showGitStatus, (showGitStatus) => this.deps.update({ showGitStatus })));
   }
 
   private pinnedList(s: Settings): HTMLElement {
@@ -232,6 +226,20 @@ function row(label: string, control: HTMLElement, hint?: string): HTMLElement {
   }
   el.append(text, control);
   return el;
+}
+
+function toggle(key: string, checked: boolean, change: (checked: boolean) => void): HTMLElement {
+  const label = document.createElement('label');
+  label.className = 'switch';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = checked;
+  input.dataset.key = key;
+  input.addEventListener('change', () => change(input.checked));
+  const track = document.createElement('span');
+  track.className = 'switch-track';
+  label.append(input, track);
+  return label;
 }
 
 function choices<T extends string>(label: string, values: T[], current: T, text: (v: T) => string, pick: (v: T) => void): HTMLElement {

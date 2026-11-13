@@ -7,6 +7,7 @@ import { HistoryStore } from '../history/HistoryStore';
 import { displayPath } from '../lib/paths';
 import { FolderCheck } from '../shell/FolderCheck';
 import { DirectoryTree } from '../sidebar/DirectoryTree';
+import { GitStatusLine } from '../sidebar/GitStatusLine';
 import { PinnedFolders } from '../sidebar/PinnedFolders';
 import { togglePin } from '../sidebar/pins';
 import { ThemeManager } from '../theme';
@@ -52,6 +53,8 @@ export class App {
   private readonly contextMenu: ContextMenu;
   private readonly tree: DirectoryTree;
   private readonly pinned: PinnedFolders;
+  private readonly gitLine = new GitStatusLine();
+  private gitToken = 0;
   private readonly tabBar: TabBar;
   private readonly settingsPanel: SettingsPanel;
   private readonly sessionContext: SessionContext;
@@ -97,6 +100,7 @@ export class App {
       unpin: (path) => this.togglePin(path),
       notify: (message) => this.toast.show(message),
     });
+    el.sidebar.append(this.gitLine.element);
     this.tree.header.after(this.pinned.element);
     this.tabBar = new TabBar(el.tabs, {
       select: (id) => this.activate(this.sessions.find((s) => s.id === id)),
@@ -136,7 +140,10 @@ export class App {
       // The command may have created, moved or removed files.
       this.folders.clear();
       void this.pinned.checkMissing();
-      if (session === this.active) void this.tree.refresh();
+      if (session === this.active) {
+        void this.tree.refresh();
+        void this.refreshGitStatus();
+      }
     });
     session.exited.on(() => this.closeTab(session));
     this.activate(session);
@@ -268,6 +275,7 @@ export class App {
     if (!this.active) return;
     this.tree.setLocation(this.active.location);
     this.renderPins();
+    void this.refreshGitStatus();
     document.title = `${this.active.title} — Hush`;
   }
 
@@ -279,6 +287,17 @@ export class App {
     const location = this.active?.location ?? { cwd: this.home, home: this.home, remoteHost: null };
     this.tree.setPinned(this.settings.pinnedFolders);
     this.pinned.render(this.settings.pinnedFolders, location);
+  }
+
+  private async refreshGitStatus(): Promise<void> {
+    const token = ++this.gitToken;
+    const location = this.active?.location;
+    if (!this.settings.showGitStatus || !location || location.remoteHost) {
+      this.gitLine.render(null);
+      return;
+    }
+    const status = await backend.gitStatus(location.cwd).catch(() => null);
+    if (token === this.gitToken) this.gitLine.render(status);
   }
 
   private reveal(path: string): void {
@@ -311,6 +330,7 @@ export class App {
     if (s.font !== before.font) for (const session of this.sessions) session.setFontFamily(FONTS[s.font].css);
     if (s.sidebarVisible !== before.sidebarVisible) this.el.app.classList.toggle('sidebar-hidden', !s.sidebarVisible);
     if (s.pinnedFolders !== before.pinnedFolders) this.renderPins();
+    if (s.showGitStatus !== before.showGitStatus) void this.refreshGitStatus();
     saveSettings(s);
     this.settingsPanel.refresh();
   }

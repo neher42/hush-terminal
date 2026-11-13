@@ -904,3 +904,53 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* Status bar at the bottom of the sidebar. */
+.git-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font: 12px/1 var(--mono-font);
+  white-space: nowrap;
+}
+
+.git-branch,
+.git-changes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.git-icon {
+  display: grid;
+}
+
+.git-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.git-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg2);
+}
+
+.git-changes {
+  flex: none;
+}
+
+.git-added {
+  color: var(--success);
+}
+
+.git-removed {
+  color: var(--danger);
+}

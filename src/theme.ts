@@ -133,6 +133,7 @@ export class ThemeManager {
       '--tooltip-text': p.tooltipText,
       '--shadow': p.shadow,
       '--danger': p.ansi[1],
+      '--success': p.ansi[2],
     };
     for (const [name, value] of Object.entries(vars)) root.setProperty(name, value);
     root.setProperty('color-scheme', this.query.matches ? 'dark' : 'light');
