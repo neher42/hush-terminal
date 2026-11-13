@@ -1,0 +1,9 @@
+[package]
+name = "hush-complete"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hush-core = { path = "../hush-core" }
+regex = "1"
