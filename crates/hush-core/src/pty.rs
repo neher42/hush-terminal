@@ -8,7 +8,6 @@ use std::thread;
 
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use serde::Deserialize;
-use tauri::ipc::{Channel, Response};
 
 use crate::error::{Error, Result};
 use crate::fsutil::write_private_file;
@@ -53,14 +52,15 @@ impl PtyManager {
         }
     }
 
+    /// `on_data` gets output as it arrives; returning false stops reading.
     /// `on_exit` fires after all output has been delivered.
     pub fn spawn(
         &self,
         cols: u16,
         rows: u16,
         cwd: Option<&Path>,
-        on_data: Channel<Response>,
-        on_exit: Channel<u32>,
+        mut on_data: impl FnMut(&[u8]) -> bool + Send + 'static,
+        on_exit: impl FnOnce(u32) + Send + 'static,
     ) -> Result<u32> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         fs::create_dir_all(&self.sessions_dir)?;
@@ -105,7 +105,7 @@ impl PtyManager {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            if on_data.send(Response::new(buf[..n].to_vec())).is_err() {
+                            if !on_data(&buf[..n]) {
                                 break;
                             }
                         }
@@ -115,7 +115,7 @@ impl PtyManager {
                 sessions.lock().expect("sessions lock").remove(&id);
                 let _ = fs::remove_file(&command_file);
                 let _ = fs::remove_file(highlight_file(&command_file));
-                let _ = on_exit.send(code);
+                on_exit(code);
             })?;
 
         Ok(id)

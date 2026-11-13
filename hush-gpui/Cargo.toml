@@ -1,0 +1,13 @@
+[package]
+name = "hush-gpui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Shaders are compiled when the app starts, so building doesn't need Xcode's
+# separately downloaded Metal toolchain.
+gpui = { version = "0.2", features = ["runtime_shaders"] }
+alacritty_terminal = "0.26"
+futures = "0.3"
+

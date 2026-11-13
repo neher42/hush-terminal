@@ -4,12 +4,12 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-use crate::error::{Error, Result};
-use crate::files::DirEntry;
-use crate::git::GitStatus;
+use hush_core::error::{Error, Result};
+use hush_core::files::DirEntry;
+use hush_core::git::GitStatus;
 use crate::menu::AppearanceMenu;
-use crate::pty::{CommandAction, PtyManager};
-use crate::{claude, completion, files, git, history, settings};
+use hush_core::pty::{CommandAction, PtyManager};
+use hush_core::{claude, executables, files, git, history, settings};
 
 #[tauri::command]
 pub fn pty_spawn(
@@ -20,7 +20,15 @@ pub fn pty_spawn(
     on_data: Channel<Response>,
     on_exit: Channel<u32>,
 ) -> Result<u32> {
-    pty.spawn(cols, rows, cwd.as_deref(), on_data, on_exit)
+    pty.spawn(
+        cols,
+        rows,
+        cwd.as_deref(),
+        move |bytes| on_data.send(Response::new(bytes.to_vec())).is_ok(),
+        move |code| {
+            let _ = on_exit.send(code);
+        },
+    )
 }
 
 #[tauri::command]
@@ -71,7 +79,7 @@ pub async fn read_history(path: PathBuf) -> Vec<String> {
 
 #[tauri::command]
 pub async fn list_executables(path_var: String) -> Vec<String> {
-    completion::list_executables(&path_var)
+    executables::list_executables(&path_var)
 }
 
 #[tauri::command]

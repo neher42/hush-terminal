@@ -1,20 +1,10 @@
-mod claude;
 mod commands;
-mod completion;
-mod error;
-mod files;
-mod fsutil;
-mod git;
-mod history;
 mod menu;
-mod pty;
-mod settings;
-mod shell;
 
 use tauri::{Manager, RunEvent};
 
-use crate::pty::PtyManager;
-use crate::shell::ShellIntegration;
+use hush_core::pty::PtyManager;
+use hush_core::shell::ShellIntegration;
 
 pub fn run() {
     let app = tauri::Builder::default()
