@@ -2,13 +2,18 @@
 
 A macOS terminal with an editor-like command line, built with Tauri and xterm.js.
 
-- Edit commands with normal macOS shortcuts (⌘←/→, ⌥←/→, ⌘⌫, shift-select, ⌘Z)
-- One selectable surface: select across output and the command you're typing
-- History suggestions (→ to accept), tab completion, syntax highlighting
-- Tabs (⌘T, ⌘W, ⌥⌘←/→, ⌘1-9)
-- Sidebar with the current folder, pinned folders and a folder tree
-- Per-command actions on hover: copy output, copy command, re-run, send to Claude
-- `TERM=xterm-256color`, so ssh works everywhere
+![Hush with the folder sidebar, git status and a history suggestion](docs/images/hero.png)
+
+## Why
+
+A terminal that stays out of the way:
+
+- **No extras.** No account, no AI, no popups. Your normal zsh with your own config.
+- **Native controls.** The command line edits like any macOS text field: click, select,
+  ⌘⌫, ⌥←/→, ⌘Z.
+- **One surface.** Input isn't a separate box, so you can select across output and the
+  command you're typing.
+- **Just enough help.** History suggestions, tab completion and a folder sidebar.
 
 ## Building
 
