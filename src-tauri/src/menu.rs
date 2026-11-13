@@ -33,6 +33,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let hush = SubmenuBuilder::new(app, "Hush")
         .about(None)
         .separator()
+        .item(&item("settings", "Settings…", "CmdOrCtrl+,")?)
+        .separator()
         .services()
         .separator()
         .hide()

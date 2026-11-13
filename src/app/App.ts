@@ -13,7 +13,8 @@ import { ThemeManager } from '../theme';
 import { ContextMenu } from '../ui/ContextMenu';
 import { icons } from '../ui/icons';
 import { Toast } from '../ui/toast';
-import { type Appearance, clampFontSize, DEFAULT_FONT_SIZE, saveSettings, type Settings } from './settings';
+import { type Appearance, clampFontSize, DEFAULT_FONT_SIZE, FONTS, saveSettings, type Settings } from './settings';
+import { SettingsPanel } from './SettingsPanel';
 import { TabBar } from './TabBar';
 import { type SessionContext, TerminalSession } from './TerminalSession';
 
@@ -30,6 +31,7 @@ type MenuId =
   | 'font_reset'
   | 'previous_tab'
   | 'next_tab'
+  | 'settings'
   | `appearance_${Appearance}`;
 
 interface Elements {
@@ -51,6 +53,7 @@ export class App {
   private readonly tree: DirectoryTree;
   private readonly pinned: PinnedFolders;
   private readonly tabBar: TabBar;
+  private readonly settingsPanel: SettingsPanel;
   private readonly sessionContext: SessionContext;
   private sessions: TerminalSession[] = [];
   private active: TerminalSession | null = null;
@@ -68,6 +71,7 @@ export class App {
       folders: this.folders,
       palette: () => this.theme.palette,
       fontSize: () => this.settings.fontSize,
+      fontFamily: () => FONTS[this.settings.font].css,
       copy: (text, confirmation) => void this.copy(text, confirmation),
       sendToClaude: (text) => void this.sendToClaude(text),
       openLink: (url) => void openUrl(url).catch((err: unknown) => this.showError(err)),
@@ -102,6 +106,14 @@ export class App {
     this.theme.changed.on((palette) => {
       for (const session of this.sessions) session.setPalette(palette);
       this.matchWindowBackground(palette.background);
+    });
+    this.settingsPanel = new SettingsPanel(el.app, {
+      home,
+      settings: () => this.settings,
+      update: (patch) => this.updateSettings(patch),
+      claudePermission: backend.claudePermission,
+      openPermissionSettings: () => void backend.openClaudePermissionSettings().catch((err: unknown) => this.showError(err)),
+      onClose: () => this.active?.focus(),
     });
     this.applyAppearance(this.settings.appearance);
     this.matchWindowBackground(this.theme.palette.background);
@@ -206,23 +218,24 @@ export class App {
         this.copyCwd();
         return;
       case 'toggle_sidebar':
-        this.toggleSidebar();
+        this.updateSettings({ sidebarVisible: !this.settings.sidebarVisible });
         return;
       case 'font_bigger':
-        this.setFontSize(this.settings.fontSize + 1);
+        this.updateSettings({ fontSize: clampFontSize(this.settings.fontSize + 1) });
         return;
       case 'font_smaller':
-        this.setFontSize(this.settings.fontSize - 1);
+        this.updateSettings({ fontSize: clampFontSize(this.settings.fontSize - 1) });
         return;
       case 'font_reset':
-        this.setFontSize(DEFAULT_FONT_SIZE);
+        this.updateSettings({ fontSize: DEFAULT_FONT_SIZE });
         return;
       case 'appearance_system':
       case 'appearance_light':
       case 'appearance_dark':
-        this.settings.appearance = id.slice('appearance_'.length) as Appearance;
-        saveSettings(this.settings);
-        this.applyAppearance(this.settings.appearance);
+        this.updateSettings({ appearance: id.slice('appearance_'.length) as Appearance });
+        return;
+      case 'settings':
+        this.settingsPanel.open();
         return;
     }
   }
@@ -233,7 +246,7 @@ export class App {
     newTab.innerHTML = icons.plus;
     copyCwd.innerHTML = icons.copy;
     for (const button of [toggleSidebar, newTab, copyCwd]) button.addEventListener('mousedown', (e) => e.preventDefault());
-    toggleSidebar.addEventListener('click', () => this.toggleSidebar());
+    toggleSidebar.addEventListener('click', () => this.updateSettings({ sidebarVisible: !this.settings.sidebarVisible }));
     newTab.addEventListener('click', () => void this.openTab());
     copyCwd.addEventListener('click', () => this.copyCwd());
     app.classList.toggle('sidebar-hidden', !this.settings.sidebarVisible);
@@ -259,9 +272,7 @@ export class App {
   }
 
   private togglePin(path: string): void {
-    this.settings.pinnedFolders = togglePin(this.settings.pinnedFolders, path);
-    saveSettings(this.settings);
-    this.renderPins();
+    this.updateSettings({ pinnedFolders: togglePin(this.settings.pinnedFolders, path) });
   }
 
   private renderPins(): void {
@@ -289,17 +300,19 @@ export class App {
     if (cwd) void this.copy(cwd, `Copied ${cwd}`);
   }
 
-  private toggleSidebar(): void {
-    this.settings.sidebarVisible = !this.settings.sidebarVisible;
-    this.el.app.classList.toggle('sidebar-hidden', !this.settings.sidebarVisible);
-    saveSettings(this.settings);
-    this.active?.focus();
-  }
-
-  private setFontSize(size: number): void {
-    this.settings.fontSize = clampFontSize(size);
-    saveSettings(this.settings);
-    for (const session of this.sessions) session.setFontSize(this.settings.fontSize);
+  // Every settings change goes through here, wherever it comes from (menu, sidebar,
+  // settings panel), so applying and saving stay in one place.
+  private updateSettings(patch: Partial<Settings>): void {
+    const before = { ...this.settings };
+    Object.assign(this.settings, patch);
+    const s = this.settings;
+    if (s.appearance !== before.appearance) this.applyAppearance(s.appearance);
+    if (s.fontSize !== before.fontSize) for (const session of this.sessions) session.setFontSize(s.fontSize);
+    if (s.font !== before.font) for (const session of this.sessions) session.setFontFamily(FONTS[s.font].css);
+    if (s.sidebarVisible !== before.sidebarVisible) this.el.app.classList.toggle('sidebar-hidden', !s.sidebarVisible);
+    if (s.pinnedFolders !== before.pinnedFolders) this.renderPins();
+    saveSettings(s);
+    this.settingsPanel.refresh();
   }
 
   // Setting the window theme also switches prefers-color-scheme in the webview, so

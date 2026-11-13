@@ -96,6 +96,16 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf> {
 }
 
 #[tauri::command]
+pub fn claude_permission() -> bool {
+    claude::has_permission()
+}
+
+#[tauri::command]
+pub fn open_claude_permission_settings() {
+    claude::open_permission_settings();
+}
+
+#[tauri::command]
 pub fn set_appearance_menu(menu: State<'_, AppearanceMenu<Wry>>, mode: String) {
     menu.select(&mode);
 }

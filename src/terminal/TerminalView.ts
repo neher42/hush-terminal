@@ -19,11 +19,10 @@ export interface CellBox {
 export interface TerminalViewOptions {
   theme: ITheme;
   fontSize: number;
+  fontFamily: string;
   openLink(url: string): void;
   onResize(cols: number, rows: number): void;
 }
-
-export const FONT_FAMILY = '"JetBrains Mono", "SF Mono", Menlo, monospace';
 
 export class TerminalView {
   readonly term: Terminal;
@@ -37,7 +36,7 @@ export class TerminalView {
   ) {
     this.term = new Terminal({
       allowProposedApi: true,
-      fontFamily: FONT_FAMILY,
+      fontFamily: options.fontFamily,
       fontSize: options.fontSize,
       lineHeight: 1.25,
       cursorBlink: true,
@@ -79,6 +78,11 @@ export class TerminalView {
 
   setFontSize(size: number): void {
     this.term.options.fontSize = size;
+    this.fit();
+  }
+
+  setFontFamily(family: string): void {
+    this.term.options.fontFamily = family;
     this.fit();
   }
 

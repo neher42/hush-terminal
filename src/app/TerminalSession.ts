@@ -21,6 +21,7 @@ export interface SessionContext {
   folders: FolderCheck;
   palette(): Palette;
   fontSize(): number;
+  fontFamily(): string;
   copy(text: string, confirmation?: string): void;
   sendToClaude(text: string): void;
   openLink(url: string): void;
@@ -65,6 +66,7 @@ export class TerminalSession {
     this.view = new TerminalView(this.element, {
       theme: terminalTheme(ctx.palette()),
       fontSize: ctx.fontSize(),
+      fontFamily: ctx.fontFamily(),
       openLink: (url) => ctx.openLink(url),
       onResize: (cols, rows) => this.onResize(cols, rows),
     });
@@ -178,6 +180,10 @@ export class TerminalSession {
 
   setFontSize(size: number): void {
     this.view.setFontSize(size);
+  }
+
+  setFontFamily(family: string): void {
+    this.view.setFontFamily(family);
   }
 
   setPalette(palette: Palette): void {

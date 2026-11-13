@@ -55,7 +55,15 @@ pub fn choose_message_box(focused: Option<usize>, closeness: &[Option<usize>]) -
 }
 
 #[cfg(target_os = "macos")]
-pub use macos::deliver;
+pub use macos::{deliver, has_permission, open_permission_settings};
+
+#[cfg(not(target_os = "macos"))]
+pub fn has_permission() -> bool {
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn open_permission_settings() {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn deliver() -> Delivery {
@@ -137,6 +145,15 @@ mod macos {
     fn running_claude() -> Option<Retained<NSRunningApplication>> {
         let id = NSString::from_str(BUNDLE_ID);
         NSRunningApplication::runningApplicationsWithBundleIdentifier(&id).firstObject()
+    }
+
+    pub fn has_permission() -> bool {
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    pub fn open_permission_settings() {
+        let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+        let _ = std::process::Command::new("open").arg(url).status();
     }
 
     fn is_trusted() -> bool {

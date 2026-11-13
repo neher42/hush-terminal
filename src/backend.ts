@@ -19,6 +19,8 @@ export const backend = {
   readSettings: () => invoke<string | null>('read_settings'),
   writeSettings: (json: string) => invoke<void>('write_settings', { json }),
   setAppearanceMenu: (mode: string) => invoke<void>('set_appearance_menu', { mode }),
+  claudePermission: () => invoke<boolean>('claude_permission'),
+  openClaudePermissionSettings: () => invoke<void>('open_claude_permission_settings'),
 };
 
 export interface PtyHandlers {
