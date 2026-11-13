@@ -8,6 +8,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-background-color",
     "core:window:allow-close",
+    "core:window:allow-set-theme",
     "clipboard-manager:allow-write-text",
     "opener:allow-open-url",
     "opener:allow-reveal-item-in-dir"

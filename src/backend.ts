@@ -18,6 +18,7 @@ export const backend = {
   sendToClaude: (text: string) => invoke<ClaudeDelivery>('send_to_claude', { text }),
   readSettings: () => invoke<string | null>('read_settings'),
   writeSettings: (json: string) => invoke<void>('write_settings', { json }),
+  setAppearanceMenu: (mode: string) => invoke<void>('set_appearance_menu', { mode }),
 };
 
 export interface PtyHandlers {

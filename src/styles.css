@@ -197,6 +197,7 @@ body {
 
 .sidebar-header {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   padding: 12px 10px 10px;
   border-bottom: 1px solid var(--line);
@@ -232,6 +233,9 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Cut long paths at the start so the current folder stays visible. */
+  direction: rtl;
+  text-align: left;
 }
 
 .tree {
@@ -316,13 +320,6 @@ body {
   font: 12.5px/1.5 var(--ui-font);
 }
 
-.sidebar-footer {
-  padding: 8px 12px 10px;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
 
 .terminal-pane {
   position: relative;

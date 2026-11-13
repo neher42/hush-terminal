@@ -42,6 +42,7 @@ pub fn run() {
             commands::send_to_claude,
             commands::read_settings,
             commands::write_settings,
+            commands::set_appearance_menu,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Hush app");

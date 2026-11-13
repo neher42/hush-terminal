@@ -86,18 +86,19 @@ export class DirectoryTree {
     this.tree.className = 'tree';
     this.tree.setAttribute('role', 'tree');
 
-    const footer = document.createElement('div');
-    footer.className = 'sidebar-footer';
-    footer.textContent = 'Click inserts a path · double-click opens · right-click for more';
 
-    root.replaceChildren(header, this.tree, footer);
+    root.replaceChildren(header, this.tree);
     this.bindEvents();
   }
 
   setLocation(location: Location): void {
     const moved = location.cwd !== this.location.cwd || location.remoteHost !== this.location.remoteHost;
     this.location = location;
-    this.pathText.textContent = (location.remoteHost ? `${location.remoteHost}:` : '') + displayPath(location.cwd, location.home);
+    // The box truncates from the left (see .cwd-path); dir=ltr keeps the path in order.
+    const text = document.createElement('span');
+    text.dir = 'ltr';
+    text.textContent = (location.remoteHost ? `${location.remoteHost}:` : '') + displayPath(location.cwd, location.home);
+    this.pathText.replaceChildren(text);
     this.pathText.title = location.cwd;
     this.updatePinButton();
     if (moved) {

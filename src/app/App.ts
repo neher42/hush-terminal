@@ -13,7 +13,7 @@ import { ThemeManager } from '../theme';
 import { ContextMenu } from '../ui/ContextMenu';
 import { icons } from '../ui/icons';
 import { Toast } from '../ui/toast';
-import { clampFontSize, DEFAULT_FONT_SIZE, saveSettings, type Settings } from './settings';
+import { type Appearance, clampFontSize, DEFAULT_FONT_SIZE, saveSettings, type Settings } from './settings';
 import { TabBar } from './TabBar';
 import { type SessionContext, TerminalSession } from './TerminalSession';
 
@@ -29,7 +29,8 @@ type MenuId =
   | 'font_smaller'
   | 'font_reset'
   | 'previous_tab'
-  | 'next_tab';
+  | 'next_tab'
+  | `appearance_${Appearance}`;
 
 interface Elements {
   app: HTMLElement;
@@ -102,6 +103,7 @@ export class App {
       for (const session of this.sessions) session.setPalette(palette);
       this.matchWindowBackground(palette.background);
     });
+    this.applyAppearance(this.settings.appearance);
     this.matchWindowBackground(this.theme.palette.background);
     this.setupChrome();
   }
@@ -215,6 +217,13 @@ export class App {
       case 'font_reset':
         this.setFontSize(DEFAULT_FONT_SIZE);
         return;
+      case 'appearance_system':
+      case 'appearance_light':
+      case 'appearance_dark':
+        this.settings.appearance = id.slice('appearance_'.length) as Appearance;
+        saveSettings(this.settings);
+        this.applyAppearance(this.settings.appearance);
+        return;
     }
   }
 
@@ -291,6 +300,15 @@ export class App {
     this.settings.fontSize = clampFontSize(size);
     saveSettings(this.settings);
     for (const session of this.sessions) session.setFontSize(this.settings.fontSize);
+  }
+
+  // Setting the window theme also switches prefers-color-scheme in the webview, so
+  // ThemeManager picks up the change like a system appearance change.
+  private applyAppearance(mode: Appearance): void {
+    void getCurrentWindow()
+      .setTheme(mode === 'system' ? null : mode)
+      .catch((err: unknown) => console.error('Could not set the appearance:', err));
+    void backend.setAppearanceMenu(mode).catch((err: unknown) => console.error('Could not update the menu:', err));
   }
 
   // Avoids white flashes in newly exposed areas while resizing in dark mode.

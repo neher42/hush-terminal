@@ -1,7 +1,10 @@
 import { backend } from '../backend';
 
+export type Appearance = 'system' | 'light' | 'dark';
+
 export interface Settings {
   fontSize: number;
+  appearance: Appearance;
   sidebarVisible: boolean;
   /** Absolute paths, in the order they show in the sidebar. */
   pinnedFolders: string[];
@@ -9,7 +12,8 @@ export interface Settings {
 
 export const DEFAULT_FONT_SIZE = 13.5;
 export const FONT_SIZE_RANGE = { min: 9, max: 28 } as const;
-const DEFAULTS: Settings = { fontSize: DEFAULT_FONT_SIZE, sidebarVisible: true, pinnedFolders: [] };
+const DEFAULTS: Settings = { fontSize: DEFAULT_FONT_SIZE, appearance: 'system', sidebarVisible: true, pinnedFolders: [] };
+const APPEARANCES: readonly Appearance[] = ['system', 'light', 'dark'];
 const LEGACY_STORAGE_KEY = 'hush.settings';
 
 export async function loadSettings(): Promise<Settings> {
@@ -34,6 +38,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const pinned = Array.isArray(value.pinnedFolders) ? value.pinnedFolders : [];
   return {
     fontSize: typeof value.fontSize === 'number' && Number.isFinite(value.fontSize) ? clampFontSize(value.fontSize) : DEFAULTS.fontSize,
+    appearance: APPEARANCES.includes(value.appearance as Appearance) ? (value.appearance as Appearance) : DEFAULTS.appearance,
     sidebarVisible: typeof value.sidebarVisible === 'boolean' ? value.sidebarVisible : DEFAULTS.sidebarVisible,
     pinnedFolders: [...new Set(pinned.filter((p): p is string => typeof p === 'string' && p.startsWith('/')))],
   };

@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::error::{Error, Result};
 use crate::files::DirEntry;
+use crate::menu::AppearanceMenu;
 use crate::pty::{CommandAction, PtyManager};
 use crate::{claude, completion, files, history, settings};
 
@@ -92,6 +93,11 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf> {
         .app_config_dir()
         .map(|dir| dir.join("settings.json"))
         .map_err(|err| Error::Message(err.to_string()))
+}
+
+#[tauri::command]
+pub fn set_appearance_menu(menu: State<'_, AppearanceMenu<Wry>>, mode: String) {
+    menu.select(&mode);
 }
 
 #[tauri::command]
