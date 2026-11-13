@@ -2600,6 +2600,8 @@ dependencies = [
  "hush-complete",
  "hush-core",
  "hush-editor",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

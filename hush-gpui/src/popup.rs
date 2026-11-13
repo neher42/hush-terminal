@@ -1,15 +1,14 @@
 //! The completion and history menu, drawn under (or above) the command.
 
 use gpui::{
-    anchored, div, hsla, point, prelude::*, px, rgb, svg, AnyElement, Bounds, BoxShadow, Context,
-    FontWeight, MouseButton, Pixels, SharedString,
+    anchored, div, point, prelude::*, px, rgb, svg, AnyElement, Bounds, Context, FontWeight,
+    MouseButton, Pixels, SharedString,
 };
 
 use crate::colors::Palette;
 use crate::prompt::{Popup, PopupRow};
+use crate::ui::{self, UI_FONT};
 use crate::view::TerminalView;
-
-pub const UI_FONT: &str = ".SystemUIFont";
 
 const PADDING: f32 = 4.0;
 const TITLE_HEIGHT: f32 = 22.0;
@@ -17,24 +16,6 @@ const ROW_HEIGHT: f32 = 26.0;
 const HINTS_HEIGHT: f32 = 27.0;
 const GAP: f32 = 4.0;
 const MARGIN: f32 = 8.0;
-
-/// Soft two-layer shadow for floating panels.
-pub fn shadow() -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: hsla(0.6, 0.3, 0.07, 0.08),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
-            spread_radius: px(0.),
-        },
-        BoxShadow {
-            color: hsla(0.6, 0.5, 0.12, 0.16),
-            offset: point(px(0.), px(10.)),
-            blur_radius: px(28.),
-            spread_radius: px(0.),
-        },
-    ]
-}
 
 /// Draws `popup` next to `anchor` (the cell it hangs from), below it when it fits
 /// inside `area` and above it otherwise.
@@ -79,7 +60,7 @@ pub fn render(
         .border_color(rgb(palette.line))
         .rounded(px(9.))
         .bg(rgb(palette.menu))
-        .shadow(shadow())
+        .shadow(ui::shadow(palette))
         .font_family(font)
         .text_size(px(12.5))
         .text_color(rgb(palette.foreground))

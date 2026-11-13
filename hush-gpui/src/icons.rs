@@ -15,10 +15,14 @@ pub enum Icon {
     Prompt,
     History,
     Flag,
+    Chevron,
+    Pin,
+    Plus,
+    Sidebar,
 }
 
 impl Icon {
-    const ALL: [Icon; 10] = [
+    const ALL: [Icon; 14] = [
         Icon::Copy,
         Icon::Command,
         Icon::Rerun,
@@ -29,6 +33,10 @@ impl Icon {
         Icon::Prompt,
         Icon::History,
         Icon::Flag,
+        Icon::Chevron,
+        Icon::Pin,
+        Icon::Plus,
+        Icon::Sidebar,
     ];
 
     pub fn path(self) -> &'static str {
@@ -43,6 +51,10 @@ impl Icon {
             Icon::Prompt => "icons/prompt.svg",
             Icon::History => "icons/history.svg",
             Icon::Flag => "icons/flag.svg",
+            Icon::Chevron => "icons/chevron.svg",
+            Icon::Pin => "icons/pin.svg",
+            Icon::Plus => "icons/plus.svg",
+            Icon::Sidebar => "icons/sidebar.svg",
         }
     }
 
@@ -64,6 +76,12 @@ impl Icon {
             Icon::Prompt => r#"<path d="M4.5 4.5 8 8l-3.5 3.5"/>"#,
             Icon::History => r#"<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/>"#,
             Icon::Flag => r#"<path d="M4.5 8h7"/>"#,
+            Icon::Chevron => r#"<path d="M6 3.5 10.5 8 6 12.5"/>"#,
+            Icon::Pin => r#"<path d="M5.5 2.5h5M6.5 2.5v4L4.5 9h7l-2-2.5v-4M8 9v4.5"/>"#,
+            Icon::Plus => r#"<path d="M8 3.5v9M3.5 8h9"/>"#,
+            Icon::Sidebar => {
+                r#"<rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M6.2 3v10"/>"#
+            }
         }
     }
 

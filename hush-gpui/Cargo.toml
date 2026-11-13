@@ -14,3 +14,5 @@ hush-core = { path = "../crates/hush-core" }
 hush-editor = { path = "../crates/hush-editor" }
 hush-complete = { path = "../crates/hush-complete" }
 dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

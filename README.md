@@ -27,6 +27,13 @@ npm run app:build   # Hush.app and .dmg in src-tauri/target/release/bundle
 
 Tests: `npm test` and `cargo test` (in `src-tauri`).
 
+### Native version
+
+`hush-gpui` is a native rewrite on [GPUI](https://www.gpui.rs) that shares the editor,
+completion and shell code in `crates/`. Run it with `cargo run --release -p hush-gpui`,
+or build `target/release/bundle/Hush.app` with `hush-gpui/bundle.sh`. Tests:
+`cargo test --workspace`.
+
 ## Releasing
 
 The version lives in `package.json`. To publish a release:

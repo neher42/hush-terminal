@@ -1,28 +1,37 @@
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use gpui::{Hsla, Rgba};
 
-/// Same light palette as the web version (src/theme.ts).
+/// Same palettes as the web version (src/theme.ts).
 pub struct Palette {
     pub foreground: u32,
     pub background: u32,
+    /// Title bar and sidebar.
+    pub chrome: u32,
     pub cursor: u32,
     pub selection: u32,
     pub selection_alpha: f32,
     pub ansi: [u32; 16],
     pub line: u32,
+    pub secondary: u32,
     pub muted: u32,
+    pub faint: u32,
     pub accent: u32,
     /// Faint wash behind a hovered command.
     pub hover: u32,
+    /// The current folder in the sidebar.
+    pub current_row: u32,
+    pub current_row_text: u32,
     pub menu: u32,
     pub menu_selected: u32,
     pub tooltip: u32,
     pub tooltip_text: u32,
+    pub dark: bool,
 }
 
 pub const LIGHT: Palette = Palette {
     foreground: 0x1b1e23,
     background: 0xffffff,
+    chrome: 0xf5f6f8,
     cursor: 0x1b1e23,
     selection: 0x2a63c7,
     selection_alpha: 0.22,
@@ -31,13 +40,44 @@ pub const LIGHT: Palette = Palette {
         0xa9afb8, 0xcc3a2f, 0x25804b, 0xa2670a, 0x2a63c7, 0x8a4ec2, 0x1b7f8c, 0x1b1e23,
     ],
     line: 0xe2e5ea,
+    secondary: 0x3d434c,
     muted: 0x878e99,
+    faint: 0xa9afb8,
     accent: 0x2a63c7,
     hover: 0xf6f7f9,
+    current_row: 0xe2eafa,
+    current_row_text: 0x1d4ea6,
     menu: 0xffffff,
     menu_selected: 0xe7eefa,
     tooltip: 0x1b1e23,
     tooltip_text: 0xffffff,
+    dark: false,
+};
+
+pub const DARK: Palette = Palette {
+    foreground: 0xdde1e7,
+    background: 0x16181c,
+    chrome: 0x1b1e23,
+    cursor: 0xdde1e7,
+    selection: 0x7aa8ff,
+    selection_alpha: 0.30,
+    ansi: [
+        0x3a3f47, 0xff6e61, 0x7fcf98, 0xe2b25d, 0x7aa8ff, 0xc4a1ff, 0x5fc7d3, 0xdde1e7, //
+        0x5a616c, 0xff6e61, 0x7fcf98, 0xe2b25d, 0x7aa8ff, 0xc4a1ff, 0x5fc7d3, 0xdde1e7,
+    ],
+    line: 0x2a2e35,
+    secondary: 0xb9bfc8,
+    muted: 0x737a85,
+    faint: 0x5a616c,
+    accent: 0x7aa8ff,
+    hover: 0x1c1f24,
+    current_row: 0x223150,
+    current_row_text: 0xadc8ff,
+    menu: 0x202329,
+    menu_selected: 0x2a3447,
+    tooltip: 0xe6e9ee,
+    tooltip_text: 0x16181c,
+    dark: true,
 };
 
 impl Palette {

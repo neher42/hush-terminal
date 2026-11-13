@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,10 +10,11 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use futures::StreamExt;
 use gpui::{
-    div, point, prelude::*, px, size, Bounds, ClipboardItem, Context, FocusHandle, Font,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    div, point, prelude::*, px, size, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle,
+    Font, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
     ScrollWheelEvent, SharedString, Task, Window,
 };
+use hush_complete::paths::{base_name, shell_path};
 use hush_complete::{CommandCatalog, FolderCheck, HistoryStore, Place};
 use hush_core::claude::{self, Delivery};
 use hush_core::events::ShellEvent;
@@ -20,9 +23,10 @@ use hush_core::history::read_zsh_history;
 use hush_core::pty::PtyManager;
 use hush_editor::{resolve_key, Key};
 
+use crate::actions::{Clear, Copy, Cut, Paste, SelectAll};
 use crate::block_bar::{self, BlockAction};
 use crate::blocks::{self, Block, BlockLog};
-use crate::colors::{Palette, LIGHT};
+use crate::colors::Palette;
 use crate::element::{Geometry, TerminalElement};
 use crate::keys::{self, Mods};
 use crate::popup;
@@ -34,16 +38,39 @@ const PADDING: f32 = 8.0;
 /// command again ourselves.
 const REDRAW_FALLBACK: Duration = Duration::from_millis(250);
 const NOTICE_TIME: Duration = Duration::from_millis(1600);
+const BUSY: &str = "A command is running. Wait for the prompt, or press ⌃C to stop it.";
+
+/// What a tab tells the window around it.
+pub enum TerminalEvent {
+    /// The title or folder changed.
+    Changed,
+    /// A command finished; files may have changed.
+    CommandFinished,
+    Exited,
+    Notify(SharedString),
+}
+
+/// How the terminal is drawn; the same for every tab.
+#[derive(Clone)]
+pub struct Look {
+    pub font: Font,
+    pub font_size: Pixels,
+    pub palette: &'static Palette,
+}
 
 pub struct TerminalView {
     pub(crate) terminal: Terminal,
     prompt: PromptEditor,
     blocks: BlockLog,
-    history: HistoryStore,
+    /// Shared by all tabs, so a command typed in one is suggested in the others.
+    history: Rc<RefCell<HistoryStore>>,
     catalog: CommandCatalog,
     folders: FolderCheck,
     cwd: String,
     home: String,
+    /// What runs right now, and the title it set.
+    running: Option<String>,
+    program_title: Option<String>,
     focus: FocusHandle,
     pub(crate) font: Font,
     pub(crate) font_size: Pixels,
@@ -56,7 +83,6 @@ pub struct TerminalView {
     mouse: Option<gpui::Point<Pixels>>,
     /// The block under the mouse, which shows its buttons.
     pub(crate) hovered: Option<Block>,
-    toast: Option<(SharedString, Task<()>)>,
     notice_timer: Option<(u64, Task<()>)>,
     /// Fractional lines left over from smooth scrolling.
     scroll_remainder: f32,
@@ -68,8 +94,10 @@ pub struct TerminalView {
 impl TerminalView {
     pub fn new(
         pty: Arc<PtyManager>,
+        cwd: &str,
+        history: Rc<RefCell<HistoryStore>>,
+        look: Look,
         run: Option<String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let initial = GridSize {
@@ -82,7 +110,7 @@ impl TerminalView {
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "/".to_owned());
         let (terminal, mut output) =
-            Terminal::spawn(pty, Some(home.as_ref()), initial).expect("failed to start the shell");
+            Terminal::spawn(pty, Some(cwd.as_ref()), initial).expect("failed to start the shell");
 
         // Output arrives in bursts; handle everything queued, then redraw once.
         cx.spawn(async move |this, cx| {
@@ -105,27 +133,26 @@ impl TerminalView {
         })
         .detach();
 
-        let focus = cx.focus_handle();
-        window.focus(&focus);
         Self {
             terminal,
             prompt: PromptEditor::default(),
             blocks: BlockLog::default(),
-            history: HistoryStore::default(),
+            history,
             catalog: CommandCatalog::default(),
             folders: FolderCheck::default(),
-            cwd: home.clone(),
+            cwd: cwd.to_owned(),
             home,
-            focus,
-            font: gpui::font("Menlo"),
-            font_size: px(13.5),
-            palette: &LIGHT,
+            running: None,
+            program_title: None,
+            focus: cx.focus_handle(),
+            font: look.font,
+            font_size: look.font_size,
+            palette: look.palette,
             geometry: None,
             pressed: false,
             drag_start: None,
             mouse: None,
             hovered: None,
-            toast: None,
             notice_timer: None,
             scroll_remainder: 0.0,
             redraw_fallback: None,
@@ -133,11 +160,70 @@ impl TerminalView {
         }
     }
 
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus
+    }
+
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    /// The running program's title, or the folder at the prompt.
+    pub fn title(&self) -> String {
+        if let Some(running) = self.running.as_ref().filter(|_| !self.prompt.is_active()) {
+            if let Some(title) = self.program_title.as_ref().filter(|t| !t.is_empty()) {
+                return title.clone();
+            }
+            return running
+                .split_whitespace()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        if self.cwd == self.home {
+            "~".to_owned()
+        } else {
+            base_name(&self.cwd).to_owned()
+        }
+    }
+
+    pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
+        self.font = look.font;
+        self.font_size = look.font_size;
+        self.palette = look.palette;
+        cx.notify();
+    }
+
+    /// Types a path (relative when it can be) into the command line.
+    pub fn insert_path(&mut self, path: &str, is_dir: bool, cx: &mut Context<Self>) {
+        if !self.prompt.is_active() {
+            cx.emit(TerminalEvent::Notify(BUSY.into()));
+            return;
+        }
+        let mut word = shell_path(path, &self.cwd, &self.home);
+        if is_dir && path != self.cwd {
+            word.push('/');
+        }
+        self.with_prompt(|prompt, env| prompt.insert(&word, env));
+        cx.notify();
+    }
+
+    pub fn open_folder(&mut self, path: &str, cx: &mut Context<Self>) {
+        if !self.prompt.is_active() {
+            cx.emit(TerminalEvent::Notify(BUSY.into()));
+            return;
+        }
+        let command = format!("cd {}", shell_path(path, &self.cwd, &self.home));
+        self.run(&command);
+        cx.notify();
+    }
+
     /// Runs `f` with the prompt editor and everything it works with.
     fn with_prompt<R>(&mut self, f: impl FnOnce(&mut PromptEditor, &mut Env) -> R) -> R {
+        let history = self.history.borrow();
         let mut env = Env {
             terminal: &mut self.terminal,
-            history: &self.history,
+            history: &history,
             catalog: &self.catalog,
             folders: &self.folders,
             place: Place {
@@ -153,8 +239,16 @@ impl TerminalView {
             Output::Wakeup => self.terminal.woke(),
             Output::Shell(marker) => self.handle_shell_event(marker, cx),
             Output::Term(Event::PtyWrite(text)) => self.terminal.write(text.as_bytes()),
+            Output::Term(Event::Title(title)) => {
+                self.program_title = Some(title);
+                cx.emit(TerminalEvent::Changed);
+            }
+            Output::Term(Event::ResetTitle) => {
+                self.program_title = None;
+                cx.emit(TerminalEvent::Changed);
+            }
             Output::Term(_) => {}
-            Output::Exit => cx.quit(),
+            Output::Exit => cx.emit(TerminalEvent::Exited),
         }
     }
 
@@ -171,13 +265,23 @@ impl TerminalView {
                 if let Some(command) = self.pending_run.take() {
                     self.run(&command);
                 }
+                cx.emit(TerminalEvent::Changed);
             }
-            ShellEvent::CommandStart => self.prompt.deactivate(),
+            ShellEvent::CommandStart => {
+                self.prompt.deactivate();
+                cx.emit(TerminalEvent::Changed);
+            }
             ShellEvent::CommandEnd { exit_code } => {
                 self.blocks.finished(block, exit_code);
                 self.folders.clear();
+                self.running = None;
+                self.program_title = None;
+                cx.emit(TerminalEvent::CommandFinished);
             }
-            ShellEvent::Cwd { path, .. } => self.cwd = path,
+            ShellEvent::Cwd { path, .. } => {
+                self.cwd = path;
+                cx.emit(TerminalEvent::Changed);
+            }
             ShellEvent::Meta { key, value } => match key.as_str() {
                 "histfile" => {
                     let entries = cx
@@ -185,7 +289,7 @@ impl TerminalView {
                         .spawn(async move { read_zsh_history(value.as_ref()) });
                     cx.spawn(async move |this, cx| {
                         let entries = entries.await;
-                        let _ = this.update(cx, |view, _| view.history.load(entries));
+                        let _ = this.update(cx, |view, _| view.history.borrow_mut().load(entries));
                     })
                     .detach();
                 }
@@ -215,7 +319,8 @@ impl TerminalView {
 
     fn submitted(&mut self, submitted: Option<Submitted>) {
         if let Some(Submitted { block, command }) = submitted {
-            self.history.add(&command);
+            self.history.borrow_mut().add(&command);
+            self.running = Some(command.clone());
             self.blocks.ran(block, command);
         }
     }
@@ -243,7 +348,8 @@ impl TerminalView {
                 let delivery = cx.background_executor().spawn(async { claude::deliver() });
                 cx.spawn(async move |this, cx| {
                     if let Delivery::Copied { message } = delivery.await {
-                        let _ = this.update(cx, |view, cx| view.show_toast(message, cx));
+                        let _ =
+                            this.update(cx, |_, cx| cx.emit(TerminalEvent::Notify(message.into())));
                     }
                 })
                 .detach();
@@ -254,19 +360,7 @@ impl TerminalView {
 
     fn copy(&mut self, text: String, confirmation: &'static str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.show_toast(confirmation, cx);
-    }
-
-    fn show_toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        let hide = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(NOTICE_TIME).await;
-            let _ = this.update(cx, |view, cx| {
-                view.toast = None;
-                cx.notify();
-            });
-        });
-        self.toast = Some((text.into(), hide));
-        cx.notify();
+        cx.emit(TerminalEvent::Notify(confirmation.into()));
     }
 
     /// Hides a "No matches" notice after a moment.
@@ -311,11 +405,6 @@ impl TerminalView {
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         let m = &keystroke.modifiers;
-        if m.platform && self.app_shortcut(&keystroke.key, cx) {
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
 
         if self.prompt.is_active() {
             let key = Key {
@@ -362,34 +451,36 @@ impl TerminalView {
         }
     }
 
-    /// ⌘ shortcuts. These move to the app menu once there is one.
-    fn app_shortcut(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
-        match key {
-            "q" => cx.quit(),
-            "c" => {
-                if let Some(text) = self.terminal.term.lock().selection_to_string() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-            }
-            "v" => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.paste(&text);
-                }
-            }
-            "x" => {
-                if let Some(text) = self.with_prompt(|prompt, env| prompt.cut(env)) {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-            }
-            "a" => {
-                if !self.with_prompt(|prompt, env| prompt.select_all(env)) {
-                    self.select_everything();
-                }
-            }
-            "k" => self.with_prompt(|prompt, env| prompt.clear_screen(env)),
-            _ => return false,
+    fn copy_selection(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.terminal.term.lock().selection_to_string() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
-        true
+    }
+
+    fn paste_clipboard(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.paste(&text);
+            cx.notify();
+        }
+    }
+
+    fn cut(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.with_prompt(|prompt, env| prompt.cut(env)) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            cx.notify();
+        }
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.with_prompt(|prompt, env| prompt.select_all(env)) {
+            self.select_everything();
+        }
+        cx.notify();
+    }
+
+    fn clear(&mut self, _: &Clear, _window: &mut Window, cx: &mut Context<Self>) {
+        self.with_prompt(|prompt, env| prompt.clear_screen(env));
+        cx.notify();
     }
 
     fn paste(&mut self, text: &str) {
@@ -602,17 +693,10 @@ impl TerminalView {
     }
 }
 
+impl EventEmitter<TerminalEvent> for TerminalView {}
+
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let toast = self.toast.as_ref().map(|(text, _)| {
-            div()
-                .absolute()
-                .bottom(px(16.))
-                .w_full()
-                .flex()
-                .justify_center()
-                .child(block_bar::label(text.clone(), self.palette))
-        });
         div()
             .id("terminal")
             .size_full()
@@ -620,6 +704,11 @@ impl Render for TerminalView {
             .bg(self.palette.background())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::paste_clipboard))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::clear))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
@@ -630,8 +719,7 @@ impl Render for TerminalView {
                     .relative()
                     .size_full()
                     .child(TerminalElement { view: cx.entity() })
-                    .children(self.render_block_bar(cx))
-                    .children(toast),
+                    .children(self.render_block_bar(cx)),
             )
             .children(self.render_popup(cx))
     }

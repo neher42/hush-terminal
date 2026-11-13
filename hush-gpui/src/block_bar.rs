@@ -1,12 +1,10 @@
 //! Buttons shown on the command block under the mouse.
 
-use gpui::{
-    div, prelude::*, px, rgb, svg, AnyElement, Context, MouseButton, Pixels, SharedString, Window,
-};
+use gpui::{div, prelude::*, px, rgb, svg, AnyElement, Context, MouseButton, Pixels, SharedString};
 
 use crate::colors::Palette;
 use crate::icons::Icon;
-use crate::popup::UI_FONT;
+use crate::ui;
 use crate::view::TerminalView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,37 +92,6 @@ fn button(
         // Keep focus and any selection in the terminal.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(move |view, _, _, cx| view.block_action(action, cx)))
-        .tooltip(move |_, cx| {
-            cx.new(|_| Tooltip {
-                text: action.label().into(),
-                palette,
-            })
-            .into()
-        })
+        .tooltip(ui::tooltip(action.label(), palette))
         .into_any_element()
-}
-
-pub struct Tooltip {
-    pub text: SharedString,
-    pub palette: &'static Palette,
-}
-
-impl Render for Tooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        label(self.text.clone(), self.palette)
-    }
-}
-
-/// Small dark label, for tooltips and short confirmations.
-pub fn label(text: SharedString, palette: &Palette) -> gpui::Div {
-    div()
-        .px(px(8.))
-        .py(px(4.))
-        .rounded(px(5.))
-        .bg(rgb(palette.tooltip))
-        .text_color(rgb(palette.tooltip_text))
-        .font_family(UI_FONT)
-        .text_size(px(11.5))
-        .whitespace_nowrap()
-        .child(text)
 }
