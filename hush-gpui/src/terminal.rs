@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -64,16 +65,20 @@ impl From<GridSize> for WindowSize {
 }
 
 /// Parses shell output on the PTY thread, stopping at each shell marker so the
-/// cursor position that goes with it is exact.
-struct Reader {
+/// cursor position that goes with it is exact. Programs often write line by line,
+/// so this runs for every few bytes and must stay cheap: the UI hears about new
+/// output once per frame, not once per read.
+struct Parser {
     term: Arc<FairMutex<Term<Listener>>>,
     tx: UnboundedSender<Output>,
+    /// Set while a wakeup is on its way to the UI, so there is only ever one.
+    awake: Arc<AtomicBool>,
     parser: Processor,
     scanner: OscScanner,
 }
 
-impl Reader {
-    fn feed(&mut self, bytes: &[u8]) -> bool {
+impl Parser {
+    fn feed(&mut self, bytes: &[u8]) {
         let mut markers = Vec::new();
         self.scanner
             .scan(bytes, |end, event| markers.push((end, event)));
@@ -98,7 +103,9 @@ impl Reader {
             self.parser.stop_sync(&mut *term);
         }
         drop(term);
-        self.tx.unbounded_send(Output::Wakeup).is_ok()
+        if !self.awake.swap(true, Ordering::AcqRel) {
+            let _ = self.tx.unbounded_send(Output::Wakeup);
+        }
     }
 }
 
@@ -110,6 +117,7 @@ pub struct Terminal {
     /// Parses what Hush itself draws (the command line), separate from the shell's
     /// stream which may stop in the middle of a sequence.
     local: Processor,
+    awake: Arc<AtomicBool>,
     size: GridSize,
 }
 
@@ -125,19 +133,25 @@ impl Terminal {
             &size,
             Listener(tx.clone()),
         )));
-        let mut reader = Reader {
+        let awake = Arc::new(AtomicBool::new(false));
+        let mut parser = Parser {
             term: Arc::clone(&term),
-            tx: tx.clone(),
+            tx,
+            awake: Arc::clone(&awake),
             parser: Processor::new(),
             scanner: OscScanner::default(),
         };
+        let exit = parser.tx.clone();
         let id = pty.spawn(
             size.cols,
             size.rows,
             cwd,
-            move |bytes| reader.feed(bytes),
+            move |bytes| {
+                parser.feed(bytes);
+                true
+            },
             move |_| {
-                let _ = tx.unbounded_send(Output::Exit);
+                let _ = exit.unbounded_send(Output::Exit);
             },
         )?;
         let terminal = Self {
@@ -145,9 +159,15 @@ impl Terminal {
             pty,
             id,
             local: Processor::new(),
+            awake,
             size,
         };
         Ok((terminal, rx))
+    }
+
+    /// The UI took in the latest output; the next output sends a new wakeup.
+    pub fn woke(&self) {
+        self.awake.store(false, Ordering::Release);
     }
 
     pub fn size(&self) -> GridSize {

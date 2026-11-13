@@ -129,7 +129,7 @@ impl TerminalView {
 
     fn handle_output(&mut self, output: Output, cx: &mut Context<Self>) {
         match output {
-            Output::Wakeup => {}
+            Output::Wakeup => self.terminal.woke(),
             Output::Shell(event, cursor) => self.handle_shell_event(event, cursor, cx),
             Output::Term(Event::PtyWrite(text)) => self.terminal.write(text.as_bytes()),
             Output::Term(_) => {}
