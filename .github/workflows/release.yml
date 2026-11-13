@@ -13,40 +13,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check tag matches package.json
+      - name: Check tag matches the app version
         run: |
-          version=$(node -p "require('./package.json').version")
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' hush-gpui/Cargo.toml | head -n 1)
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME doesn't match package.json version $version"
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match hush-gpui version $version"
             exit 1
           fi
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
-      - run: npm ci
+      - name: Build Hush.app and the disk image
+        run: |
+          hush-gpui/bundle.sh
+          hdiutil create -volname Hush -srcfolder target/release/bundle/Hush.app \
+            -ov -format UDZO "Hush-$GITHUB_REF_NAME.dmg"
 
-      - uses: tauri-apps/tauri-action@v1
+      - name: Publish the release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
-          releaseDraft: false
-          args: --bundles dmg
-          releaseBody: |
-            Apple Silicon (M1 or newer) only.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "Hush-$GITHUB_REF_NAME.dmg" \
+            --title "$GITHUB_REF_NAME" --notes-file - <<'NOTES'
+          Apple Silicon (M1 or newer) only.
 
-            The app isn't notarized, so macOS blocks it on first launch. After moving Hush to Applications, either click "Open Anyway" in System Settings → Privacy & Security, or run:
+          The app isn't notarized, so macOS blocks it on first launch. After moving Hush to Applications, either click "Open Anyway" in System Settings → Privacy & Security, or run:
 
-            ```
-            xattr -dr com.apple.quarantine /Applications/Hush.app
-            ```
+          ```
+          xattr -dr com.apple.quarantine /Applications/Hush.app
+          ```
+          NOTES

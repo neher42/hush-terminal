@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "hush-gpui"]
-# The web app keeps its own build so Tauri's tooling and CI work unchanged.
-exclude = ["src-tauri"]
 
 [profile.release]
 codegen-units = 1

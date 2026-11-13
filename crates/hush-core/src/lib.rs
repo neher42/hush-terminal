@@ -1,5 +1,4 @@
-//! Hush's shell sessions and everything else that isn't UI: shared by the web
-//! (Tauri) app and the native (GPUI) app.
+//! Hush's shell sessions and everything else that isn't UI.
 
 pub mod claude;
 pub mod error;

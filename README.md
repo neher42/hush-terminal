@@ -1,8 +1,7 @@
 # Hush
 
-A macOS terminal with an editor-like command line. The app is native, built on
-[GPUI](https://www.gpui.rs) and alacritty_terminal; the earlier Tauri and xterm.js
-version is still in the repository.
+A native macOS terminal with an editor-like command line, built with
+[GPUI](https://www.gpui.rs) and alacritty_terminal.
 
 ![Hush with the folder sidebar, git status and a history suggestion](docs/images/hero.png)
 
@@ -31,22 +30,17 @@ The code is split into `hush-gpui` (the app) and shared crates in `crates/`:
 `hush-core` (PTY, shell integration, git, files, Send to Claude), `hush-editor` (the
 command line editor) and `hush-complete` (completion and history suggestions).
 
-### Tauri version
-
-Requires Node and Rust. `npm install`, then `npm run app:dev` or `npm run app:build`
-(Hush.app and .dmg in `src-tauri/target/release/bundle`). Tests: `npm test` and
-`cargo test` in `src-tauri`.
-
 ## Releasing
 
-The version lives in `package.json`. To publish a release:
+The version lives in `hush-gpui/Cargo.toml`. To publish a release, set it there,
+commit, then tag and push:
 
 ```sh
-npm version 0.2.0        # updates package.json, commits and tags v0.2.0
+git tag -a v0.2.0 -m v0.2.0
 git push --follow-tags
 ```
 
-The release workflow builds the Tauri `.dmg` on GitHub and attaches it to the release.
+The release workflow builds the `.dmg` on GitHub and attaches it to the release.
 
 ## How it works
 

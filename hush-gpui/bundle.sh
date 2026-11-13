@@ -11,7 +11,7 @@ cargo build --release -p hush-gpui --manifest-path "$root/Cargo.toml"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$root/target/release/hush-gpui" "$app/Contents/MacOS/Hush"
-cp "$root/src-tauri/icons/icon.icns" "$app/Contents/Resources/Hush.icns"
+cp "$root/hush-gpui/assets/Hush.icns" "$app/Contents/Resources/Hush.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -19,7 +19,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>Hush</string>
   <key>CFBundleDisplayName</key><string>Hush</string>
-  <key>CFBundleIdentifier</key><string>dev.hush.native</string>
+  <key>CFBundleIdentifier</key><string>dev.hush.terminal</string>
   <key>CFBundleExecutable</key><string>Hush</string>
   <key>CFBundleIconFile</key><string>Hush</string>
   <key>CFBundlePackageType</key><string>APPL</string>

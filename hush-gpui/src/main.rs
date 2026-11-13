@@ -28,7 +28,7 @@ use hush_core::shell::ShellIntegration;
 
 use crate::settings::SettingsFile;
 
-/// Same folder as the Tauri app, so both share settings and session files.
+/// The bundle identifier, also the name of the settings and sessions folder.
 const APP_ID: &str = "dev.hush.terminal";
 
 const FONTS: [&[u8]; 2] = [

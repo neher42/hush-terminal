@@ -11,38 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: npm
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            src-tauri
 
-      - run: npm ci
-
-      # Type checks and builds the frontend, which the Rust crate embeds.
-      - run: npm run build
-
-      - run: npm test
-
-      # Shared crates and the native app.
-      - name: Rust workspace checks
-        run: |
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
-
-      - name: Tauri app checks
-        working-directory: src-tauri
-        run: |
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
