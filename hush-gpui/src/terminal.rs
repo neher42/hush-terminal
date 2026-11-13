@@ -1,22 +1,34 @@
-use std::collections::HashMap;
-use std::io;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
-use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, Notifier};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Point;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty;
+use alacritty_terminal::vte::ansi::Processor;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use hush_core::events::{OscScanner, ShellEvent};
+use hush_core::pty::{CommandAction, PtyManager};
 
-/// Forwards terminal events (new output, replies, exit) to the UI thread.
+/// What the PTY thread reports to the UI.
+pub enum Output {
+    /// New output was parsed into the grid.
+    Wakeup,
+    /// A shell marker and the cursor position at the moment it was printed.
+    Shell(ShellEvent, Point),
+    /// Replies, title changes and the like from the terminal emulator.
+    Term(Event),
+    Exit,
+}
+
 #[derive(Clone)]
-pub struct Listener(UnboundedSender<Event>);
+pub struct Listener(UnboundedSender<Output>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
-        let _ = self.0.unbounded_send(event);
+        let _ = self.0.unbounded_send(Output::Term(event));
     }
 }
 
@@ -51,61 +63,115 @@ impl From<GridSize> for WindowSize {
     }
 }
 
-/// A shell running in a pseudo-terminal. Parsing happens on alacritty's PTY thread;
-/// the UI only locks the grid to draw it.
+/// Parses shell output on the PTY thread, stopping at each shell marker so the
+/// cursor position that goes with it is exact.
+struct Reader {
+    term: Arc<FairMutex<Term<Listener>>>,
+    tx: UnboundedSender<Output>,
+    parser: Processor,
+    scanner: OscScanner,
+}
+
+impl Reader {
+    fn feed(&mut self, bytes: &[u8]) -> bool {
+        let mut markers = Vec::new();
+        self.scanner
+            .scan(bytes, |end, event| markers.push((end, event)));
+
+        let mut term = self.term.lock();
+        let mut done = 0;
+        for (end, event) in markers {
+            self.parser.advance(&mut *term, &bytes[done..end]);
+            done = end;
+            let cursor = term.grid().cursor.point;
+            let _ = self.tx.unbounded_send(Output::Shell(event, cursor));
+        }
+        self.parser.advance(&mut *term, &bytes[done..]);
+        // A program that starts a synchronized update and never ends it shouldn't
+        // freeze the screen.
+        if self
+            .parser
+            .sync_timeout()
+            .sync_timeout()
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            self.parser.stop_sync(&mut *term);
+        }
+        drop(term);
+        self.tx.unbounded_send(Output::Wakeup).is_ok()
+    }
+}
+
+/// A shell session: the PTY, and the grid its output is parsed into.
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<Listener>>>,
-    notifier: Notifier,
+    pty: Arc<PtyManager>,
+    id: u32,
+    /// Parses what Hush itself draws (the command line), separate from the shell's
+    /// stream which may stop in the middle of a sequence.
+    local: Processor,
     size: GridSize,
 }
 
 impl Terminal {
-    /// `command` replaces the login shell, e.g. for benchmarks (`hush-gpui -e cmd args`).
     pub fn spawn(
-        command: Option<(String, Vec<String>)>,
+        pty: Arc<PtyManager>,
+        cwd: Option<&Path>,
         size: GridSize,
-    ) -> io::Result<(Self, UnboundedReceiver<Event>)> {
+    ) -> hush_core::Result<(Self, UnboundedReceiver<Output>)> {
         let (tx, rx) = unbounded();
-        let listener = Listener(tx);
-        let env = HashMap::from([
-            ("TERM".to_owned(), "xterm-256color".to_owned()),
-            ("COLORTERM".to_owned(), "truecolor".to_owned()),
-            ("TERM_PROGRAM".to_owned(), "Hush".to_owned()),
-        ]);
-        // Start the user's shell directly as a login shell, like the web version, rather
-        // than through /usr/bin/login (alacritty_terminal's default).
-        let (program, args) = command.unwrap_or_else(|| {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
-            (shell, vec!["-l".to_owned()])
-        });
-        let options = tty::Options {
-            shell: Some(tty::Shell::new(program, args)),
-            working_directory: std::env::var_os("HOME").map(Into::into),
-            env,
-            ..Default::default()
-        };
-        let pty = tty::new(&options, size.into(), 0)?;
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
             &size,
-            listener.clone(),
+            Listener(tx.clone()),
         )));
-        let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, false, false)?;
-        let notifier = Notifier(event_loop.channel());
-        event_loop.spawn();
-        Ok((
-            Self {
-                term,
-                notifier,
-                size,
+        let mut reader = Reader {
+            term: Arc::clone(&term),
+            tx: tx.clone(),
+            parser: Processor::new(),
+            scanner: OscScanner::default(),
+        };
+        let id = pty.spawn(
+            size.cols,
+            size.rows,
+            cwd,
+            move |bytes| reader.feed(bytes),
+            move |_| {
+                let _ = tx.unbounded_send(Output::Exit);
             },
-            rx,
-        ))
+        )?;
+        let terminal = Self {
+            term,
+            pty,
+            id,
+            local: Processor::new(),
+            size,
+        };
+        Ok((terminal, rx))
     }
 
-    pub fn write(&self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) {
-        use alacritty_terminal::event::Notify;
-        self.notifier.notify(bytes);
+    pub fn size(&self) -> GridSize {
+        self.size
+    }
+
+    pub fn write(&self, bytes: &[u8]) {
+        let _ = self.pty.write(self.id, bytes);
+    }
+
+    pub fn submit(&self, command: &str, highlights: &str, action: CommandAction) {
+        let _ = self
+            .pty
+            .submit_command(self.id, command, highlights, action);
+    }
+
+    /// Draws into the grid as if the shell had printed `sequence`.
+    pub fn draw(&mut self, sequence: &str) {
+        let mut term = self.term.lock();
+        self.local.advance(&mut *term, sequence.as_bytes());
+    }
+
+    pub fn cursor(&self) -> Point {
+        self.term.lock().grid().cursor.point
     }
 
     pub fn resize(&mut self, size: GridSize) {
@@ -114,6 +180,12 @@ impl Terminal {
         }
         self.size = size;
         self.term.lock().resize(size);
-        self.notifier.on_resize(size.into());
+        let _ = self.pty.resize(self.id, size.cols, size.rows);
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self.pty.kill(self.id);
     }
 }

@@ -3,6 +3,7 @@
 
 pub mod claude;
 pub mod error;
+pub mod events;
 pub mod executables;
 pub mod files;
 mod fsutil;

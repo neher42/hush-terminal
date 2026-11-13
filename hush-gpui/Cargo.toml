@@ -10,4 +10,5 @@ publish = false
 gpui = { version = "0.2", features = ["runtime_shaders"] }
 alacritty_terminal = "0.26"
 futures = "0.3"
-
+hush-core = { path = "../crates/hush-core" }
+dirs = "6"
