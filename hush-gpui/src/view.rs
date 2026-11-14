@@ -700,6 +700,7 @@ impl Render for TerminalView {
         div()
             .id("terminal")
             .size_full()
+            .cursor_text()
             .p(px(PADDING))
             .bg(self.palette.background())
             .track_focus(&self.focus)

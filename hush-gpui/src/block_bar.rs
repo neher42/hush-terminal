@@ -51,6 +51,7 @@ pub fn render(
     div()
         .absolute()
         .top(top)
+        .cursor_default()
         .right(px(12.))
         .flex()
         .gap(px(4.))

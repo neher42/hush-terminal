@@ -54,6 +54,7 @@ pub fn render(
         .flex()
         .flex_col()
         .min_w(px(280.))
+        .cursor_default()
         .max_w(px(520.))
         .p(px(PADDING))
         .border_1()
