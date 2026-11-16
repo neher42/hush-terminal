@@ -7,10 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, size, App, Bounds, ClipboardItem, Context, DragMoveEvent,
-    Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, MouseUpEvent, Pixels, Point,
-    SharedString, Subscription, Task, TitlebarOptions, Window, WindowAppearance, WindowBounds,
-    WindowOptions,
+    div, point, prelude::*, px, rgb, size, App, Bounds, ClipboardItem, Context, Entity,
+    FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Point, SharedString, Subscription,
+    Task, TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use hush_complete::paths::display_path;
 use hush_complete::HistoryStore;
@@ -35,50 +34,14 @@ struct Tab {
     _events: Subscription,
 }
 
-/// A tab being dragged: dropped on another tab it reorders, dropped outside the
-/// window it becomes a window of its own.
-#[derive(Clone)]
-struct DraggedTab {
-    index: usize,
-    title: SharedString,
-    palette: &'static Palette,
-}
-
-impl Render for DraggedTab {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .h(px(28.))
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .rounded(px(7.))
-            .bg(rgb(self.palette.background))
-            .border_1()
-            .border_color(rgb(self.palette.line))
-            .text_color(rgb(self.palette.foreground))
-            .font_family(UI_FONT)
-            .text_size(px(12.))
-            .whitespace_nowrap()
-            .child(self.title.clone())
-    }
-}
-
-/// What a window starts with.
-pub enum WindowContent {
-    /// A new shell in `cwd` (the home folder by default), running `run` at the first prompt.
-    Shell {
-        cwd: Option<String>,
-        run: Option<String>,
-    },
-    /// A tab dragged out of another window, with its shell still running.
-    Tab(Entity<TerminalView>),
-}
-
-/// Opens a window. Windows keep their own tabs but share the ptys and the settings file.
+/// Opens a window with one shell in `cwd` (the home folder by default), running
+/// `run` at the first prompt. Windows keep their own tabs but share the ptys and
+/// the settings file.
 pub fn open_window(
     pty: Arc<PtyManager>,
     settings_file: SettingsFile,
-    content: WindowContent,
+    cwd: Option<String>,
+    run: Option<String>,
     origin: Option<Point<Pixels>>,
     cx: &mut App,
 ) {
@@ -98,7 +61,7 @@ pub fn open_window(
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
-        cx.new(|cx| Workspace::new(pty, settings_file, content, window, cx))
+        cx.new(|cx| Workspace::new(pty, settings_file, cwd, run, window, cx))
     })
     .expect("failed to open the window");
 }
@@ -109,8 +72,6 @@ pub struct Workspace {
     history: Rc<RefCell<HistoryStore>>,
     tabs: Vec<Tab>,
     active: usize,
-    /// The tab being dragged, while a drag is going on.
-    dragging: Option<usize>,
     sidebar: Entity<Sidebar>,
     settings: Settings,
     settings_file: SettingsFile,
@@ -127,7 +88,8 @@ impl Workspace {
     pub fn new(
         pty: Arc<PtyManager>,
         settings_file: SettingsFile,
-        content: WindowContent,
+        cwd: Option<String>,
+        run: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -161,7 +123,6 @@ impl Workspace {
             history: Rc::default(),
             tabs: Vec::new(),
             active: 0,
-            dragging: None,
             sidebar,
             settings,
             settings_file,
@@ -172,13 +133,8 @@ impl Workspace {
             system_dark,
             _subscriptions: subscriptions,
         };
-        match content {
-            WindowContent::Shell { cwd, run } => {
-                let cwd = cwd.unwrap_or_else(|| home.clone());
-                workspace.open_tab(&cwd, run, window, cx);
-            }
-            WindowContent::Tab(view) => workspace.adopt_tab(view, window, cx),
-        }
+        let cwd = cwd.unwrap_or_else(|| home.clone());
+        workspace.open_tab(&cwd, run, window, cx);
         workspace
     }
 
@@ -215,23 +171,6 @@ impl Workspace {
         self.activate(self.tabs.len() - 1, window, cx);
     }
 
-    /// Takes in a tab dragged out of another window; its shell keeps running.
-    fn adopt_tab(
-        &mut self,
-        view: Entity<TerminalView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let look = self.look();
-        view.update(cx, |view, cx| view.set_look(look, cx));
-        let events = cx.subscribe_in(&view, window, Self::on_terminal_event);
-        self.tabs.push(Tab {
-            view,
-            _events: events,
-        });
-        self.activate(self.tabs.len() - 1, window, cx);
-    }
-
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
@@ -249,62 +188,6 @@ impl Workspace {
             self.active.min(self.tabs.len() - 1)
         };
         self.activate(active, window, cx);
-    }
-
-    /// Moves a dragged tab to where the tab at `to` sits.
-    fn move_tab(&mut self, from: usize, to: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.dragging = None;
-        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
-            return;
-        }
-        let tab = self.tabs.remove(from);
-        self.tabs.insert(to, tab);
-        self.activate(to, window, cx);
-    }
-
-    /// Opens the tab at `index` in a window of its own, keeping its shell running.
-    /// The last tab stays put: a window always has one.
-    fn detach_tab(
-        &mut self,
-        index: usize,
-        mouse: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.tabs.len() < 2 || index >= self.tabs.len() {
-            return;
-        }
-        let view = self.tabs.remove(index).view;
-        // As in close_tab: the tab to the right takes its place, or the new last tab.
-        let active = if index < self.active {
-            self.active - 1
-        } else {
-            self.active.min(self.tabs.len() - 1)
-        };
-        self.activate(active, window, cx);
-        let origin = offset_origin(window, mouse - point(px(80.), px(20.)));
-        open_window(
-            self.pty.clone(),
-            self.settings_file.clone(),
-            WindowContent::Tab(view),
-            origin,
-            cx,
-        );
-    }
-
-    /// A tab let go past the edge of the window becomes its own window.
-    fn tab_released_outside(
-        &mut self,
-        event: &MouseUpEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(index) = self.dragging.take() else {
-            return;
-        };
-        if cx.has_active_drag() {
-            self.detach_tab(index, event.position, window, cx);
-        }
     }
 
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -606,11 +489,6 @@ impl Workspace {
                 let active = i == self.active;
                 let title = tab.view.read(cx).title();
                 let group = SharedString::from(format!("tab-{i}"));
-                let dragged = DraggedTab {
-                    index: i,
-                    title: SharedString::from(title.clone()),
-                    palette: p,
-                };
                 div()
                     .id(("tab", i))
                     .group(group.clone())
@@ -633,10 +511,6 @@ impl Workspace {
                     .when(!active, |el| el.bg(wash(0.05)).hover(|s| s.bg(wash(0.09))))
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .on_click(cx.listener(move |ws, _, window, cx| ws.activate(i, window, cx)))
-                    .on_drag(dragged, |tab, _, _, cx| cx.new(|_| tab.clone()))
-                    .on_drop(cx.listener(move |ws, tab: &DraggedTab, window, cx| {
-                        ws.move_tab(tab.index, i, window, cx)
-                    }))
                     .on_mouse_up(
                         MouseButton::Middle,
                         cx.listener(move |ws, _, window, cx| ws.close_tab(i, window, cx)),
@@ -688,10 +562,8 @@ impl Workspace {
         open_window(
             self.pty.clone(),
             self.settings_file.clone(),
-            WindowContent::Shell {
-                cwd: Some(cwd),
-                run: None,
-            },
+            Some(cwd),
+            None,
             origin,
             cx,
         );
@@ -776,10 +648,6 @@ impl Render for Workspace {
                 }
             }))
             .capture_key_down(cx.listener(Self::key_down))
-            .on_drag_move(cx.listener(|ws, event: &DragMoveEvent<DraggedTab>, _, cx| {
-                ws.dragging = Some(event.drag(cx).index);
-            }))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::tab_released_outside))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::close_active_tab))

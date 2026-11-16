@@ -68,13 +68,7 @@ fn main() {
             })
             .detach();
 
-            workspace::open_window(
-                pty,
-                settings_file,
-                workspace::WindowContent::Shell { cwd: None, run },
-                None,
-                cx,
-            );
+            workspace::open_window(pty, settings_file, None, run, None, cx);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     cx.quit();
