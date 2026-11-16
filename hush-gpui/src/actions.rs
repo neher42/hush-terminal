@@ -10,6 +10,7 @@ actions!(
         HideOthers,
         ShowAll,
         OpenSettings,
+        NewWindow,
         NewTab,
         CloseTab,
         Clear,
@@ -38,6 +39,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-h", Hide, None),
         KeyBinding::new("alt-cmd-h", HideOthers, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-n", NewWindow, None),
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-k", Clear, None),
@@ -78,6 +80,7 @@ pub fn menus() -> Vec<Menu> {
         Menu {
             name: "Shell".into(),
             items: vec![
+                MenuItem::action("New Window", NewWindow),
                 MenuItem::action("New Tab", NewTab),
                 MenuItem::action("Close Tab", CloseTab),
                 MenuItem::separator(),
