@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, Axis, ClipboardItem, Context, Entity, FocusHandle, FontWeight,
-    KeyDownEvent, MouseButton, SharedString, Subscription, Task, Window, WindowAppearance,
+    div, point, prelude::*, px, rgb, size, App, Axis, Bounds, ClipboardItem, Context, DisplayId,
+    Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Point, SharedString,
+    Subscription, Task, TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use hush_complete::paths::display_path;
 use hush_complete::HistoryStore;
@@ -18,7 +19,7 @@ use crate::actions::*;
 use crate::colors::{Palette, DARK, LIGHT};
 use crate::icons::Icon;
 use crate::panes::Pane;
-use crate::settings::{Appearance, Settings, SettingsFile, DEFAULT_FONT_SIZE};
+use crate::settings::{Appearance, CurrentSettings, Settings, SettingsFile, DEFAULT_FONT_SIZE};
 use crate::settings_panel::{self, PanelState};
 use crate::sidebar::{self, ContextMenu, PathCommand, Sidebar, SidebarEvent};
 use crate::ui::{self, UI_FONT};
@@ -35,15 +36,60 @@ struct Tab {
     focused: Entity<TerminalView>,
 }
 
+/// What all windows share. The settings themselves are the `CurrentSettings` global.
+#[derive(Clone)]
+pub struct Shared {
+    pub pty: Arc<PtyManager>,
+    pub settings_file: Rc<SettingsFile>,
+    /// So a command typed in one window is suggested in the others.
+    pub history: Rc<RefCell<HistoryStore>>,
+}
+
+/// A window's top left corner on a display, relative to that display.
+pub struct Place {
+    display: Option<DisplayId>,
+    origin: Point<Pixels>,
+}
+
+/// Opens a window at `place`, or centered on the main display. Its first tab runs a
+/// shell in `cwd`, running `run` at the first prompt.
+pub fn open_window(
+    shared: Shared,
+    cwd: String,
+    run: Option<String>,
+    place: Option<Place>,
+    cx: &mut App,
+) {
+    let extent = size(px(1100.), px(700.));
+    let (display, bounds) = match place {
+        Some(Place { display, origin }) => (display, Bounds::new(origin, extent)),
+        None => (None, Bounds::centered(None, extent, cx)),
+    };
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id: display,
+        window_min_size: Some(size(px(520.), px(320.))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Hush".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(14.), px(13.))),
+        }),
+        ..Default::default()
+    };
+    cx.open_window(options, |window, cx| {
+        cx.new(|cx| Workspace::new(shared, cwd, run, window, cx))
+    })
+    .expect("failed to open the window");
+}
+
 pub struct Workspace {
-    pty: Arc<PtyManager>,
+    shared: Shared,
     home: String,
-    history: Rc<RefCell<HistoryStore>>,
     tabs: Vec<Tab>,
     active: usize,
     sidebar: Entity<Sidebar>,
+    /// This window's copy of `CurrentSettings`, to see what changed.
     settings: Settings,
-    settings_file: SettingsFile,
     settings_focus: Option<FocusHandle>,
     /// Accessibility permission, checked when the settings open.
     permission: Option<bool>,
@@ -54,9 +100,9 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(
-        pty: Arc<PtyManager>,
-        settings_file: SettingsFile,
+    fn new(
+        shared: Shared,
+        cwd: String,
         run: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -64,7 +110,7 @@ impl Workspace {
         let home = dirs::home_dir()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "/".to_owned());
-        let settings = settings_file.load();
+        let settings = cx.global::<CurrentSettings>().0.clone();
         let system_dark = is_dark(window.appearance());
         let palette = palette_for(settings.appearance, system_dark);
         let font = gpui::font(settings.font.family());
@@ -84,16 +130,18 @@ impl Workspace {
                     ws.check_permission(cx);
                 }
             }),
+            cx.observe_global::<CurrentSettings>(|ws, cx| {
+                let settings = cx.global::<CurrentSettings>().0.clone();
+                ws.apply_settings(settings, cx);
+            }),
         ];
         let mut workspace = Self {
-            pty,
-            home: home.clone(),
-            history: Rc::default(),
+            shared,
+            home,
             tabs: Vec::new(),
             active: 0,
             sidebar,
             settings,
-            settings_file,
             settings_focus: None,
             permission: None,
             menu: None,
@@ -101,7 +149,7 @@ impl Workspace {
             system_dark,
             _subscriptions: subscriptions,
         };
-        workspace.open_tab(&home, run, window, cx);
+        workspace.open_tab(&cwd, run, window, cx);
         workspace
     }
 
@@ -128,7 +176,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (Entity<TerminalView>, Pane) {
-        let (pty, history, look) = (self.pty.clone(), self.history.clone(), self.look());
+        let (pty, history) = (self.shared.pty.clone(), self.shared.history.clone());
+        let look = self.look();
         let view = cx.new(|cx| TerminalView::new(pty, cwd, history, look, run, cx));
         let events = cx.subscribe_in(&view, window, Self::on_terminal_event);
         (view.clone(), Pane::terminal(view, events))
@@ -213,8 +262,9 @@ impl Workspace {
         }
         self.tabs.remove(index);
         if self.tabs.is_empty() {
-            // Closing the last tab closes the window, as in a browser.
-            cx.quit();
+            // Closing the last tab closes the window, as in a browser; the app quits
+            // with its last window.
+            window.remove_window();
             return;
         }
         // Like browsers: the tab to the right takes its place, or the new last tab.
@@ -315,9 +365,18 @@ impl Workspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let before = self.settings.clone();
-        change(&mut self.settings);
-        let after = self.settings.clone();
+        let mut settings = self.settings.clone();
+        change(&mut settings);
+        if settings == self.settings {
+            return;
+        }
+        self.shared.settings_file.save(&settings);
+        // Every window, this one included, picks it up from there.
+        cx.set_global(CurrentSettings(settings));
+    }
+
+    fn apply_settings(&mut self, after: Settings, cx: &mut Context<Self>) {
+        let before = std::mem::replace(&mut self.settings, after.clone());
         if after == before {
             return;
         }
@@ -336,7 +395,6 @@ impl Workspace {
                 sidebar.set_show_git(after.show_git_status, cx)
             });
         }
-        self.settings_file.save(&self.settings);
         cx.notify();
     }
 
@@ -594,6 +652,13 @@ impl Workspace {
         self.open_tab(&cwd, None, window, cx);
     }
 
+    /// A window in the same folder, a little below and right of this one.
+    fn new_window(&mut self, _: &NewWindow, window: &mut Window, cx: &mut Context<Self>) {
+        let cwd = self.active_view().read(cx).cwd().to_owned();
+        let place = place_from(window, point(px(30.), px(30.)), cx);
+        open_window(self.shared.clone(), cwd, None, place, cx);
+    }
+
     /// ⌘W closes the settings, the focused terminal, or the tab with its last terminal.
     fn close(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_focus.is_some() {
@@ -687,6 +752,7 @@ impl Render for Workspace {
             }))
             .capture_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::close))
             .on_action(
                 cx.listener(|ws, _: &SplitRight, window, cx| {
@@ -747,6 +813,17 @@ impl Render for Workspace {
             )
             .children(settings)
             .children(menu)
+    }
+}
+
+/// The place at `offset` from the window's top left corner, on the window's display.
+fn place_from(window: &Window, offset: Point<Pixels>, cx: &App) -> Option<Place> {
+    match window.window_bounds() {
+        WindowBounds::Windowed(bounds) => Some(Place {
+            display: window.display(cx).map(|display| display.id()),
+            origin: bounds.origin + offset,
+        }),
+        _ => None,
     }
 }
 

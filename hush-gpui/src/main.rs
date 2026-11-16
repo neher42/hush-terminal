@@ -18,16 +18,15 @@ mod view;
 mod workspace;
 
 use std::borrow::Cow;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{
-    point, px, size, App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds,
-    WindowOptions,
-};
+use gpui::{App, Application};
 use hush_core::pty::PtyManager;
 use hush_core::shell::ShellIntegration;
 
-use crate::settings::SettingsFile;
+use crate::settings::{CurrentSettings, SettingsFile};
+use crate::workspace::Shared;
 
 /// The bundle identifier, also the name of the settings and sessions folder.
 const APP_ID: &str = "dev.hush.terminal";
@@ -72,21 +71,16 @@ fn main() {
             })
             .detach();
 
-            let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(520.), px(320.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Hush".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(14.), px(13.))),
-                }),
-                ..Default::default()
+            cx.set_global(CurrentSettings(settings_file.load()));
+            let shared = Shared {
+                pty,
+                settings_file: Rc::new(settings_file),
+                history: Rc::default(),
             };
-            cx.open_window(options, |window, cx| {
-                cx.new(|cx| workspace::Workspace::new(pty, settings_file, run, window, cx))
-            })
-            .expect("failed to open the window");
+            let home = dirs::home_dir()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/".to_owned());
+            workspace::open_window(shared, home, run, None, cx);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     cx.quit();
