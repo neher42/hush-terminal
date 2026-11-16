@@ -28,6 +28,8 @@ jobs:
       - name: Build Hush.app and the disk image
         run: |
           hush-gpui/bundle.sh
+          # A bundle whose signature doesn't cover its files shows up as "damaged".
+          codesign --verify --deep --strict --verbose=2 target/release/bundle/Hush.app
           hdiutil create -volname Hush -srcfolder target/release/bundle/Hush.app \
             -ov -format UDZO "Hush-$GITHUB_REF_NAME.dmg"
 
