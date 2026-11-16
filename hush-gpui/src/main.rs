@@ -5,6 +5,7 @@ mod colors;
 mod element;
 mod icons;
 mod keys;
+mod panes;
 mod popup;
 mod prompt;
 mod settings;

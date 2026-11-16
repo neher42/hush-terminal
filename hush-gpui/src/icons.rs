@@ -19,10 +19,11 @@ pub enum Icon {
     Pin,
     Plus,
     Sidebar,
+    Split,
 }
 
 impl Icon {
-    const ALL: [Icon; 14] = [
+    const ALL: [Icon; 15] = [
         Icon::Copy,
         Icon::Command,
         Icon::Rerun,
@@ -37,6 +38,7 @@ impl Icon {
         Icon::Pin,
         Icon::Plus,
         Icon::Sidebar,
+        Icon::Split,
     ];
 
     pub fn path(self) -> &'static str {
@@ -55,6 +57,7 @@ impl Icon {
             Icon::Pin => "icons/pin.svg",
             Icon::Plus => "icons/plus.svg",
             Icon::Sidebar => "icons/sidebar.svg",
+            Icon::Split => "icons/split.svg",
         }
     }
 
@@ -81,6 +84,9 @@ impl Icon {
             Icon::Plus => r#"<path d="M8 3.5v9M3.5 8h9"/>"#,
             Icon::Sidebar => {
                 r#"<rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M6.2 3v10"/>"#
+            }
+            Icon::Split => {
+                r#"<rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M8 3v10"/>"#
             }
         }
     }

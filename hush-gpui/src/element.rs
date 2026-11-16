@@ -241,8 +241,14 @@ impl Element for TerminalElement {
             let _ = line.paint(origin, frame.line_height, window, cx);
         }
         if let Some(cursor) = frame.cursor {
-            let palette = self.view.read(cx).palette;
-            window.paint_quad(fill(cursor, palette.cursor()));
+            let view = self.view.read(cx);
+            // Faint in the terminals of a split that don't have the keyboard.
+            let color = if view.focus_handle().contains_focused(window, cx) {
+                view.palette.cursor()
+            } else {
+                view.palette.cursor().opacity(0.35)
+            };
+            window.paint_quad(fill(cursor, color));
         }
     }
 }

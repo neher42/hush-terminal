@@ -1,4 +1,4 @@
-//! The window: title bar with tabs, the sidebar and the active terminal.
+//! The window: title bar with tabs, the sidebar and the active tab's terminals.
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, ClipboardItem, Context, Entity, FocusHandle, FontWeight,
+    div, prelude::*, px, rgb, Axis, ClipboardItem, Context, Entity, FocusHandle, FontWeight,
     KeyDownEvent, MouseButton, SharedString, Subscription, Task, Window, WindowAppearance,
 };
 use hush_complete::paths::display_path;
@@ -17,6 +17,7 @@ use hush_core::pty::PtyManager;
 use crate::actions::*;
 use crate::colors::{Palette, DARK, LIGHT};
 use crate::icons::Icon;
+use crate::panes::Pane;
 use crate::settings::{Appearance, Settings, SettingsFile, DEFAULT_FONT_SIZE};
 use crate::settings_panel::{self, PanelState};
 use crate::sidebar::{self, ContextMenu, PathCommand, Sidebar, SidebarEvent};
@@ -29,8 +30,9 @@ const TRAFFIC_LIGHTS: f32 = 78.;
 const TOAST_TIME: Duration = Duration::from_millis(1600);
 
 struct Tab {
-    view: Entity<TerminalView>,
-    _events: Subscription,
+    panes: Pane,
+    /// The terminal that gets the keyboard, and whose folder the window shows.
+    focused: Entity<TerminalView>,
 }
 
 pub struct Workspace {
@@ -116,7 +118,20 @@ impl Workspace {
     }
 
     fn active_view(&self) -> &Entity<TerminalView> {
-        &self.tabs[self.active].view
+        &self.tabs[self.active].focused
+    }
+
+    fn new_terminal(
+        &mut self,
+        cwd: &str,
+        run: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<TerminalView>, Pane) {
+        let (pty, history, look) = (self.pty.clone(), self.history.clone(), self.look());
+        let view = cx.new(|cx| TerminalView::new(pty, cwd, history, look, run, cx));
+        let events = cx.subscribe_in(&view, window, Self::on_terminal_event);
+        (view.clone(), Pane::terminal(view, events))
     }
 
     fn open_tab(
@@ -126,14 +141,70 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (pty, history, look) = (self.pty.clone(), self.history.clone(), self.look());
-        let view = cx.new(|cx| TerminalView::new(pty, cwd, history, look, run, cx));
-        let events = cx.subscribe_in(&view, window, Self::on_terminal_event);
-        self.tabs.push(Tab {
-            view,
-            _events: events,
-        });
+        let (focused, panes) = self.new_terminal(cwd, run, window, cx);
+        self.tabs.push(Tab { panes, focused });
         self.activate(self.tabs.len() - 1, window, cx);
+    }
+
+    /// Opens a terminal in the same folder next to the focused one.
+    fn split(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.active_view().clone();
+        let cwd = target.read(cx).cwd().to_owned();
+        let (view, pane) = self.new_terminal(&cwd, None, window, cx);
+        let tab = &mut self.tabs[self.active];
+        tab.panes.split(&target, axis, pane);
+        self.focus_pane(view, window, cx);
+    }
+
+    /// Closes one terminal, and its tab when it was the last one there.
+    fn close_pane(
+        &mut self,
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.tabs.iter().position(|tab| tab.panes.contains(view)) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        let order = tab.panes.views();
+        if !tab.panes.remove(view) {
+            self.close_tab(index, window, cx);
+            return;
+        }
+        if &tab.focused == view {
+            // The terminal before it takes the focus, or the next one when it was first.
+            let at = order.iter().position(|v| v == view).unwrap_or(0);
+            tab.focused = order[if at > 0 { at - 1 } else { 1 }].clone();
+        }
+        if index == self.active {
+            self.activate(index, window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn focus_pane(
+        &mut self,
+        view: Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tabs[self.active].focused = view;
+        self.activate(self.active, window, cx);
+    }
+
+    fn cycle_panes(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let views = self.tabs[self.active].panes.views();
+        let len = views.len();
+        if len > 1 {
+            let at = views
+                .iter()
+                .position(|v| v == self.active_view())
+                .unwrap_or(0);
+            let next = if forward { at + 1 } else { at + len - 1 };
+            self.focus_pane(views[next % len].clone(), window, cx);
+        }
     }
 
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -189,11 +260,7 @@ impl Workspace {
                 self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx))
             }
             TerminalEvent::CommandFinished => {}
-            TerminalEvent::Exited => {
-                if let Some(index) = self.tabs.iter().position(|tab| &tab.view == view) {
-                    self.close_tab(index, window, cx);
-                }
-            }
+            TerminalEvent::Exited => self.close_pane(view, window, cx),
             TerminalEvent::Notify(text) => self.show_toast(text.clone(), cx),
         }
     }
@@ -275,9 +342,8 @@ impl Workspace {
 
     fn apply_look(&mut self, cx: &mut Context<Self>) {
         let look = self.look();
-        for tab in &self.tabs {
-            tab.view
-                .update(cx, |view, cx| view.set_look(look.clone(), cx));
+        for view in self.tabs.iter().flat_map(|tab| tab.panes.views()) {
+            view.update(cx, |view, cx| view.set_look(look.clone(), cx));
         }
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_look(look.palette, look.font.clone(), cx)
@@ -430,6 +496,13 @@ impl Workspace {
                     .on_click(cx.listener(|ws, _, window, cx| ws.new_tab(&NewTab, window, cx))),
             )
             .child(
+                ui::icon_button("split", Icon::Split, false, p)
+                    .tooltip(ui::tooltip("Split  ⌘D", p))
+                    .on_click(
+                        cx.listener(|ws, _, window, cx| ws.split(Axis::Horizontal, window, cx)),
+                    ),
+            )
+            .child(
                 ui::icon_button("copy-path", Icon::Copy, false, p)
                     .tooltip(ui::tooltip("Copy path  ⌘⇧C", p))
                     .on_click(cx.listener(|ws, _, window, cx| ws.copy_path(&CopyPath, window, cx))),
@@ -452,7 +525,7 @@ impl Workspace {
             .px(px(4.))
             .children(self.tabs.iter().enumerate().map(|(i, tab)| {
                 let active = i == self.active;
-                let title = tab.view.read(cx).title();
+                let title = tab.focused.read(cx).title();
                 let group = SharedString::from(format!("tab-{i}"));
                 div()
                     .id(("tab", i))
@@ -521,11 +594,13 @@ impl Workspace {
         self.open_tab(&cwd, None, window, cx);
     }
 
-    fn close_active_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+    /// ⌘W closes the settings, the focused terminal, or the tab with its last terminal.
+    fn close(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_focus.is_some() {
             self.close_settings(window, cx);
         } else {
-            self.close_tab(self.active, window, cx);
+            let view = self.active_view().clone();
+            self.close_pane(&view, window, cx);
         }
     }
 
@@ -555,6 +630,17 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.palette();
+        // Clicking a terminal focuses it; the window follows along.
+        let panes = self.tabs[self.active].panes.render(p, &|view| {
+            let clicked = view.clone();
+            div()
+                .size_full()
+                .capture_any_mouse_down(cx.listener(move |ws, _, window, cx| {
+                    if ws.active_view() != &clicked {
+                        ws.focus_pane(clicked.clone(), window, cx);
+                    }
+                }))
+        });
         let settings = self.settings_focus.clone().map(|focus| {
             div()
                 .track_focus(&focus)
@@ -601,10 +687,22 @@ impl Render for Workspace {
             }))
             .capture_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(Self::new_tab))
-            .on_action(cx.listener(Self::close_active_tab))
+            .on_action(cx.listener(Self::close))
+            .on_action(
+                cx.listener(|ws, _: &SplitRight, window, cx| {
+                    ws.split(Axis::Horizontal, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|ws, _: &SplitDown, window, cx| ws.split(Axis::Vertical, window, cx)),
+            )
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(|ws, _: &NextTab, window, cx| ws.cycle(true, window, cx)))
             .on_action(cx.listener(|ws, _: &PreviousTab, window, cx| ws.cycle(false, window, cx)))
+            .on_action(cx.listener(|ws, _: &NextPane, window, cx| ws.cycle_panes(true, window, cx)))
+            .on_action(
+                cx.listener(|ws, _: &PreviousPane, window, cx| ws.cycle_panes(false, window, cx)),
+            )
             .on_action(cx.listener(|ws, _: &OpenSettings, window, cx| ws.open_settings(window, cx)))
             .on_action(cx.listener(|ws, _: &ToggleSidebar, window, cx| {
                 ws.update_settings(|s| s.sidebar_visible = !s.sidebar_visible, window, cx)
@@ -643,7 +741,7 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .relative()
-                            .child(self.active_view().clone())
+                            .child(panes)
                             .children(toast),
                     ),
             )

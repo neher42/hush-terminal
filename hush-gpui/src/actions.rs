@@ -11,7 +11,9 @@ actions!(
         ShowAll,
         OpenSettings,
         NewTab,
-        CloseTab,
+        SplitRight,
+        SplitDown,
+        Close,
         Clear,
         Cut,
         Copy,
@@ -29,6 +31,8 @@ actions!(
         Zoom,
         PreviousTab,
         NextTab,
+        PreviousPane,
+        NextPane,
     ]
 );
 
@@ -39,7 +43,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-cmd-h", HideOthers, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-t", NewTab, None),
-        KeyBinding::new("cmd-w", CloseTab, None),
+        KeyBinding::new("cmd-d", SplitRight, None),
+        KeyBinding::new("shift-cmd-d", SplitDown, None),
+        KeyBinding::new("cmd-w", Close, None),
         KeyBinding::new("cmd-k", Clear, None),
         KeyBinding::new("cmd-x", Cut, None),
         KeyBinding::new("cmd-c", Copy, None),
@@ -56,6 +62,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-cmd-right", NextTab, None),
         KeyBinding::new("shift-cmd-[", PreviousTab, None),
         KeyBinding::new("shift-cmd-]", NextTab, None),
+        KeyBinding::new("cmd-[", PreviousPane, None),
+        KeyBinding::new("cmd-]", NextPane, None),
     ]);
 }
 
@@ -79,7 +87,9 @@ pub fn menus() -> Vec<Menu> {
             name: "Shell".into(),
             items: vec![
                 MenuItem::action("New Tab", NewTab),
-                MenuItem::action("Close Tab", CloseTab),
+                MenuItem::action("Split Side by Side", SplitRight),
+                MenuItem::action("Split Top and Bottom", SplitDown),
+                MenuItem::action("Close", Close),
                 MenuItem::separator(),
                 MenuItem::action("Clear", Clear),
             ],
@@ -121,6 +131,9 @@ pub fn menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Show Previous Tab", PreviousTab),
                 MenuItem::action("Show Next Tab", NextTab),
+                MenuItem::separator(),
+                MenuItem::action("Select Previous Pane", PreviousPane),
+                MenuItem::action("Select Next Pane", NextPane),
             ],
         },
     ]
