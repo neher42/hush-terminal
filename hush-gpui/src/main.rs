@@ -19,7 +19,10 @@ mod workspace;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use gpui::{App, Application};
+use gpui::{
+    point, px, size, App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds,
+    WindowOptions,
+};
 use hush_core::pty::PtyManager;
 use hush_core::shell::ShellIntegration;
 
@@ -68,7 +71,21 @@ fn main() {
             })
             .detach();
 
-            workspace::open_window(pty, settings_file, None, run, None, cx);
+            let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(520.), px(320.))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Hush".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(14.), px(13.))),
+                }),
+                ..Default::default()
+            };
+            cx.open_window(options, |window, cx| {
+                cx.new(|cx| workspace::Workspace::new(pty, settings_file, run, window, cx))
+            })
+            .expect("failed to open the window");
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     cx.quit();

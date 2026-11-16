@@ -7,9 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, size, App, Bounds, ClipboardItem, Context, Entity,
-    FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Point, SharedString, Subscription,
-    Task, TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, ClipboardItem, Context, Entity, FocusHandle, FontWeight,
+    KeyDownEvent, MouseButton, SharedString, Subscription, Task, Window, WindowAppearance,
 };
 use hush_complete::paths::display_path;
 use hush_complete::HistoryStore;
@@ -34,38 +33,6 @@ struct Tab {
     _events: Subscription,
 }
 
-/// Opens a window with one shell in `cwd` (the home folder by default), running
-/// `run` at the first prompt. Windows keep their own tabs but share the ptys and
-/// the settings file.
-pub fn open_window(
-    pty: Arc<PtyManager>,
-    settings_file: SettingsFile,
-    cwd: Option<String>,
-    run: Option<String>,
-    origin: Option<Point<Pixels>>,
-    cx: &mut App,
-) {
-    let extent = size(px(1100.), px(700.));
-    let bounds = match origin {
-        Some(origin) => Bounds::new(origin, extent),
-        None => Bounds::centered(None, extent, cx),
-    };
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(size(px(520.), px(320.))),
-        titlebar: Some(TitlebarOptions {
-            title: Some("Hush".into()),
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(14.), px(13.))),
-        }),
-        ..Default::default()
-    };
-    cx.open_window(options, |window, cx| {
-        cx.new(|cx| Workspace::new(pty, settings_file, cwd, run, window, cx))
-    })
-    .expect("failed to open the window");
-}
-
 pub struct Workspace {
     pty: Arc<PtyManager>,
     home: String,
@@ -88,7 +55,6 @@ impl Workspace {
     pub fn new(
         pty: Arc<PtyManager>,
         settings_file: SettingsFile,
-        cwd: Option<String>,
         run: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -133,8 +99,7 @@ impl Workspace {
             system_dark,
             _subscriptions: subscriptions,
         };
-        let cwd = cwd.unwrap_or_else(|| home.clone());
-        workspace.open_tab(&cwd, run, window, cx);
+        workspace.open_tab(&home, run, window, cx);
         workspace
     }
 
@@ -178,7 +143,7 @@ impl Workspace {
         self.tabs.remove(index);
         if self.tabs.is_empty() {
             // Closing the last tab closes the window, as in a browser.
-            window.remove_window();
+            cx.quit();
             return;
         }
         // Like browsers: the tab to the right takes its place, or the new last tab.
@@ -556,19 +521,6 @@ impl Workspace {
         self.open_tab(&cwd, None, window, cx);
     }
 
-    fn new_window(&mut self, _: &NewWindow, window: &mut Window, cx: &mut Context<Self>) {
-        let cwd = self.active_view().read(cx).cwd().to_owned();
-        let origin = offset_origin(window, point(px(30.), px(30.)));
-        open_window(
-            self.pty.clone(),
-            self.settings_file.clone(),
-            Some(cwd),
-            None,
-            origin,
-            cx,
-        );
-    }
-
     fn close_active_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_focus.is_some() {
             self.close_settings(window, cx);
@@ -649,7 +601,6 @@ impl Render for Workspace {
             }))
             .capture_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(Self::new_tab))
-            .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::close_active_tab))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(|ws, _: &NextTab, window, cx| ws.cycle(true, window, cx)))
@@ -698,14 +649,6 @@ impl Render for Workspace {
             )
             .children(settings)
             .children(menu)
-    }
-}
-
-/// The screen position `delta` away from the window's top left corner, if it has one.
-fn offset_origin(window: &Window, delta: Point<Pixels>) -> Option<Point<Pixels>> {
-    match window.window_bounds() {
-        WindowBounds::Windowed(bounds) => Some(bounds.origin + delta),
-        _ => None,
     }
 }
 

@@ -174,8 +174,7 @@ pub fn clamp_font_size(size: f32) -> f32 {
     ((size * 2.0).round() / 2.0).clamp(FONT_SIZE_RANGE.0, FONT_SIZE_RANGE.1)
 }
 
-/// Where settings are read from and saved to. Every window shares the same file.
-#[derive(Clone)]
+/// Where settings are read from and saved to.
 pub struct SettingsFile(PathBuf);
 
 impl SettingsFile {
